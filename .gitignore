@@ -1,0 +1,5 @@
+docs/*.local.md
+node_modules/
+dev.db
+.env
+.env.*
