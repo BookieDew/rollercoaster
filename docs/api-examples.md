@@ -45,7 +45,7 @@ Notes:
 
 Note: Ride behavior (checkpoint count, volatility, crash timing) is generated internally per reward.
 Operators configure only eligibility and boost caps; the ride pattern remains unpredictable to bettors.
-Ride duration is short by design (randomized between 0.5–10 seconds).
+Ride duration is short by design (randomized between 2–15 seconds).
 Reason: We keep ride timing internal to preserve unpredictability and avoid letting bettors time the optimal lock window.
 Operators can optionally set the thresholds at which max boost becomes reachable:
 `max_boost_min_selections` and `max_boost_min_combined_odds`. If omitted, max boost is always reachable (old behavior).
@@ -355,10 +355,12 @@ Note: The bet is already placed. This call starts the ride for that bet.
 
 Note: Ride volatility is derived from ticket strength (more selections/odds = bigger swings).
 Crash timing is deterministic per reward but can occur before the end time.
-Ride duration is randomized between 0.5–10 seconds; crash time is drawn from a normal-like distribution.
+Ride duration is randomized between 2–15 seconds; crash time is drawn from a scaled Beta distribution.
 `theoretical_max_boost_pct` represents the peak boost the user could have locked if they stopped at the best moment on that ride.
 When the ride is no longer active, the response distinguishes:
 `RIDE_CRASHED` (crash happened) vs `RIDE_ENDED` (ride ended without a crash event).
+Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes cannot occur too early.
+`ride_path` values are the effective boost percentages (after ticket strength and caps), i.e. what the bettor would actually see.
 
 ### Get Quote
 
@@ -402,12 +404,12 @@ When the ride is no longer active, the response distinguishes:
 {
   "eligible": false,
   "reason_code": "RIDE_CRASHED",
-  "qualifying_selection_count": 0,
-  "total_selection_count": 0,
-  "combined_odds": 0,
-  "current_boost_pct": null,
-  "theoretical_max_boost_pct": null,
-  "ticket_strength": null,
+  "qualifying_selection_count": 3,
+  "total_selection_count": 3,
+  "combined_odds": 6.42,
+  "current_boost_pct": 0,
+  "theoretical_max_boost_pct": 0.62,
+  "ticket_strength": 0.42,
   "ride_end_at_offset_seconds": 9.4,
   "ride_crash_at_offset_seconds": 5.8
 }
@@ -416,14 +418,14 @@ When the ride is no longer active, the response distinguishes:
 {
   "eligible": false,
   "reason_code": "RIDE_ENDED",
-  "qualifying_selection_count": 0,
-  "total_selection_count": 0,
-  "combined_odds": 0,
-  "current_boost_pct": null,
-  "theoretical_max_boost_pct": null,
-  "ticket_strength": null,
+  "qualifying_selection_count": 3,
+  "total_selection_count": 3,
+  "combined_odds": 6.42,
+  "current_boost_pct": 0,
+  "theoretical_max_boost_pct": 0.62,
+  "ticket_strength": 0.42,
   "ride_end_at_offset_seconds": 9.4,
-  "ride_crash_at_offset_seconds": 11.2
+  "ride_crash_at_offset_seconds": 5.8
 }
 ```
 

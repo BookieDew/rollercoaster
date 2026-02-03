@@ -19,6 +19,7 @@ export {
 export {
   generateSeed,
   deriveRideParams,
+  deriveCrashPct,
   deriveRideDurationSeconds,
   generateRide,
   interpolateRideValue,

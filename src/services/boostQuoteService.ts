@@ -11,10 +11,11 @@ import {
   calculateElapsedPct,
   hasRideEnded as checkRideEnded,
   calculateFinalBoost,
-  deriveRideParams,
+  deriveCrashPct,
 } from '../computations';
 import type { Selection, QuoteResponse } from '../types/ticket';
 import { ReasonCode, type EligibilityReasonCode } from '../types/reasonCodes';
+import { config } from '../config';
 
 export interface QuoteInput {
   userId: string;
@@ -93,41 +94,6 @@ export async function getQuote(
     };
   }
 
-  const elapsedPct = calculateElapsedPct(reward.startTime, reward.endTime);
-  const { crashPct } = deriveRideParams(reward.seed);
-  const rideDurationSeconds =
-    (new Date(reward.endTime).getTime() - new Date(reward.startTime).getTime()) / 1000;
-  const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
-  const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
-
-  // Check if ride has crashed or ended
-  if (elapsedPct >= crashPct) {
-    return {
-      success: true,
-      data: buildIneligibleResponse(
-        ReasonCode.RIDE_CRASHED,
-        0,
-        0,
-        0,
-        endOffsetSeconds,
-        crashOffsetSeconds
-      ),
-    };
-  }
-  if (checkRideEnded(reward.startTime, reward.endTime)) {
-    return {
-      success: true,
-      data: buildIneligibleResponse(
-        ReasonCode.RIDE_ENDED,
-        0,
-        0,
-        0,
-        endOffsetSeconds,
-        crashOffsetSeconds
-      ),
-    };
-  }
-
   // Get profile for eligibility thresholds
   const profile = await rewardProfileRepository.findById(reward.profileVersionId);
   if (!profile) {
@@ -191,6 +157,17 @@ export async function getQuote(
     minSelections: profile.minSelections,
   });
 
+  const elapsedPct = calculateElapsedPct(reward.startTime, reward.endTime);
+  const rideDurationSeconds =
+    (new Date(reward.endTime).getTime() - new Date(reward.startTime).getTime()) / 1000;
+  const crashPct = deriveCrashPct(
+    reward.seed,
+    rideDurationSeconds,
+    config.ride.minCrashSeconds
+  );
+  const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
+  const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
+
   // Get ride checkpoints and current value
   const checkpoints = await rideDefinitionRepository.findByRewardId(rewardId);
   const rideValue = interpolateRideValue(
@@ -231,6 +208,38 @@ export async function getQuote(
     },
   });
 
+  // Check if ride has crashed or ended
+  if (elapsedPct >= crashPct) {
+    return {
+      success: true,
+      data: buildRideEndedResponse(
+        ReasonCode.RIDE_CRASHED,
+        storedSelections.length,
+        qualifying.length,
+        combinedOdds,
+        ticketStrength,
+        theoreticalMaxBoostPct,
+        endOffsetSeconds,
+        crashOffsetSeconds
+      ),
+    };
+  }
+  if (checkRideEnded(reward.startTime, reward.endTime)) {
+    return {
+      success: true,
+      data: buildRideEndedResponse(
+        ReasonCode.RIDE_ENDED,
+        storedSelections.length,
+        qualifying.length,
+        combinedOdds,
+        ticketStrength,
+        theoreticalMaxBoostPct,
+        endOffsetSeconds,
+        crashOffsetSeconds
+      ),
+    };
+  }
+
   return {
     success: true,
     data: {
@@ -242,6 +251,8 @@ export async function getQuote(
       current_boost_pct: currentBoostPct,
       theoretical_max_boost_pct: theoreticalMaxBoostPct,
       ticket_strength: ticketStrength,
+      ride_end_at_offset_seconds: null,
+      ride_crash_at_offset_seconds: null,
     },
   };
 }
@@ -263,6 +274,30 @@ function buildIneligibleResponse(
     current_boost_pct: null,
     theoretical_max_boost_pct: null,
     ticket_strength: null,
+    ride_end_at_offset_seconds: endOffsetSeconds,
+    ride_crash_at_offset_seconds: crashOffsetSeconds,
+  };
+}
+
+function buildRideEndedResponse(
+  reasonCode: EligibilityReasonCode,
+  totalCount: number,
+  qualifyingCount: number,
+  combinedOdds: number,
+  ticketStrength: number,
+  theoreticalMaxBoostPct: number,
+  endOffsetSeconds: number,
+  crashOffsetSeconds: number
+): QuoteResponse {
+  return {
+    eligible: false,
+    reason_code: reasonCode,
+    qualifying_selection_count: qualifyingCount,
+    total_selection_count: totalCount,
+    combined_odds: combinedOdds,
+    current_boost_pct: 0,
+    theoretical_max_boost_pct: theoreticalMaxBoostPct,
+    ticket_strength: ticketStrength,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
   };

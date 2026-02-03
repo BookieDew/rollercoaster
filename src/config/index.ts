@@ -16,6 +16,7 @@ export interface Config {
   ride: {
     minDurationSeconds: number;
     maxDurationSeconds: number;
+    minCrashSeconds: number;
   };
   server: {
     port: number;
@@ -55,8 +56,9 @@ const apiKeySecret = getEnvVar('API_KEY_SECRET', 'dev-secret-key');
 const hmacSecret = getEnvVar('HMAC_SECRET', apiKeySecret);
 const hmacMaxSkewMs = parseInt(getEnvVar('HMAC_MAX_SKEW_MS', '300000'), 10);
 const hmacReplayCacheSize = parseInt(getEnvVar('HMAC_REPLAY_CACHE_SIZE', '10000'), 10);
-const rideMinDurationSeconds = parseFloat(getEnvVar('RIDE_MIN_DURATION_SECONDS', '0.5'));
-const rideMaxDurationSeconds = parseFloat(getEnvVar('RIDE_MAX_DURATION_SECONDS', '10'));
+const rideMinDurationSeconds = parseFloat(getEnvVar('RIDE_MIN_DURATION_SECONDS', '2'));
+const rideMaxDurationSeconds = parseFloat(getEnvVar('RIDE_MAX_DURATION_SECONDS', '15'));
+const rideMinCrashSeconds = parseFloat(getEnvVar('RIDE_MIN_CRASH_SECONDS', '2'));
 
 export const config: Config = {
   database: {
@@ -72,6 +74,7 @@ export const config: Config = {
   ride: {
     minDurationSeconds: rideMinDurationSeconds,
     maxDurationSeconds: rideMaxDurationSeconds,
+    minCrashSeconds: rideMinCrashSeconds,
   },
   server: {
     port: parseInt(getEnvVar('PORT', '3000'), 10),

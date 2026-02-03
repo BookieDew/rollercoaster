@@ -1,7 +1,9 @@
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
+import { config } from '../config';
 import {
   generateRide,
   deriveRideParams,
+  deriveRideDurationSeconds,
   interpolateRideValue,
   computeTicketStrength,
   calculateFinalBoost,
@@ -69,7 +71,12 @@ export async function simulateRide(
   input: SimulationInput
 ): Promise<ServiceResult<SimulationResult>> {
   const seed = input.seed ?? `sim-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const derived = deriveRideParams(seed);
+  const durationSeconds = deriveRideDurationSeconds(
+    seed,
+    config.ride.minDurationSeconds,
+    config.ride.maxDurationSeconds
+  );
+  const derived = deriveRideParams(seed, durationSeconds, config.ride.minCrashSeconds);
 
   let config: {
     checkpointCount: number;

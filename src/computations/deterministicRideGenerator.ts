@@ -68,17 +68,23 @@ class SeededRandom {
  * Derives internal ride parameters from the seed.
  * These are intentionally not exposed as profile settings.
  */
-export function deriveRideParams(seed: string): RideParams {
+export function deriveRideParams(
+  seed: string,
+  durationSeconds: number,
+  minCrashSeconds: number
+): RideParams {
   const rng = new SeededRandom(seed);
   const checkpointCount = Math.max(6, Math.round(rng.nextRange(8, 18)));
   const volatility = roundToDecimals(rng.nextRange(0.25, 0.85), 4);
-  const crashPct = roundToDecimals(
-    clampValue(normalSample(rng, 0.55, 0.15), 0.01, 0.95),
-    4
-  );
+  const crashPct = deriveCrashPct(seed, durationSeconds, minCrashSeconds);
 
   return { checkpointCount, volatility, crashPct };
 }
+
+/**
+ * Applies a hard minimum crash time (seconds) by adjusting the crash percentage
+ * upward when needed, while still clamping within 1%..95%.
+ */
 
 /**
  * Derives a deterministic ride duration (seconds) within a configured range.
@@ -91,6 +97,29 @@ export function deriveRideDurationSeconds(
   const rng = new SeededRandom(`duration:${seed}`);
   const duration = rng.nextRange(minSeconds, maxSeconds);
   return roundToDecimals(duration, 3);
+}
+
+/**
+ * Derives a deterministic crash percentage using a scaled Beta distribution.
+ * The crash time is sampled between minCrashSeconds and durationSeconds.
+ */
+export function deriveCrashPct(
+  seed: string,
+  durationSeconds: number,
+  minCrashSeconds: number
+): number {
+  if (durationSeconds <= 0) {
+    return 1;
+  }
+
+  const minCrash = Math.max(0, Math.min(minCrashSeconds, durationSeconds));
+  const rng = new SeededRandom(`crash:${seed}`);
+  const alpha = 10;
+  const beta = 5;
+  const sample = betaSample(rng, alpha, beta);
+  const crashSeconds = minCrash + sample * Math.max(durationSeconds - minCrash, 0);
+  const crashPct = crashSeconds / durationSeconds;
+  return roundToDecimals(clampValue(crashPct, 0.01, 0.99), 4);
 }
 
 /**
@@ -246,6 +275,45 @@ function normalSample(rng: SeededRandom, mean: number, stdDev: number): number {
   while (v === 0) v = rng.next();
   const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
   return mean + z * stdDev;
+}
+
+function gammaSample(rng: SeededRandom, shape: number): number {
+  if (shape <= 0) {
+    return 0;
+  }
+
+  if (shape < 1) {
+    // Use boost: Gamma(k) = Gamma(k+1) * U^(1/k)
+    const u = rng.next();
+    return gammaSample(rng, shape + 1) * Math.pow(u, 1 / shape);
+  }
+
+  // Marsaglia and Tsang method for shape >= 1
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+
+  while (true) {
+    const x = normalSample(rng, 0, 1);
+    const v = 1 + c * x;
+    if (v <= 0) continue;
+    const v3 = v * v * v;
+    const u = rng.next();
+    if (u < 1 - 0.0331 * x * x * x * x) {
+      return d * v3;
+    }
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v3 + Math.log(v3))) {
+      return d * v3;
+    }
+  }
+}
+
+function betaSample(rng: SeededRandom, alpha: number, beta: number): number {
+  const x = gammaSample(rng, alpha);
+  const y = gammaSample(rng, beta);
+  if (x + y === 0) {
+    return 0.5;
+  }
+  return x / (x + y);
 }
 
 function clampValue(value: number, min: number, max: number): number {

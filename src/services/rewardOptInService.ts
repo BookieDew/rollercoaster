@@ -236,7 +236,12 @@ export async function optIn(
 
   // Generate deterministic seed and ride
   const seed = reward.seed;
-  const derived = deriveRideParams(seed);
+  const durationSeconds = deriveRideDurationSeconds(
+    seed,
+    config.ride.minDurationSeconds,
+    config.ride.maxDurationSeconds
+  );
+  const derived = deriveRideParams(seed, durationSeconds, config.ride.minCrashSeconds);
   const ride = generateRide(seed, {
     checkpointCount: derived.checkpointCount,
     volatility: derived.volatility,
@@ -246,11 +251,6 @@ export async function optIn(
 
   // Start ride timing now (short duration)
   const now = new Date();
-  const durationSeconds = deriveRideDurationSeconds(
-    seed,
-    config.ride.minDurationSeconds,
-    config.ride.maxDurationSeconds
-  );
   const startTime = now.toISOString();
   const endTime = new Date(now.getTime() + durationSeconds * 1000).toISOString();
 

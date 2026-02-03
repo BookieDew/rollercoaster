@@ -19,6 +19,7 @@ import {
 import type { BetBoostLock, LockResponse, RidePathPoint } from '../types/betBoostLock';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
+import { config } from '../config';
 
 export interface LockInput {
   userId: string;
@@ -121,11 +122,18 @@ export async function lockBoost(
   const storedSelections = (reward.ticketSnapshot.selections as Selection[]) ?? [];
 
   const elapsedPct = calculateElapsedPct(reward.startTime, reward.endTime);
-  const { crashPct, checkpointCount, volatility } = deriveRideParams(reward.seed);
   const rideDurationSeconds =
     (new Date(reward.endTime).getTime() - new Date(reward.startTime).getTime()) / 1000;
+  const derived = deriveRideParams(
+    reward.seed,
+    rideDurationSeconds,
+    config.ride.minCrashSeconds
+  );
+  const crashPct = derived.crashPct;
   const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
   const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
+  const checkpointCount = derived.checkpointCount;
+  const volatility = derived.volatility;
 
   // Check if ride has crashed or ended
   if (elapsedPct >= crashPct) {
@@ -215,7 +223,20 @@ export async function lockBoost(
     elapsedPct
   );
 
-  const ridePath = buildRidePath(checkpoints, 60, crashPct);
+  const ridePath = buildRidePath(
+    checkpoints,
+    60,
+    crashPct,
+    ticketStrength,
+    {
+      minBoostPct: profile.minBoostPct,
+      maxBoostPct: profile.maxBoostPct,
+      maxBoostMinSelections: profile.maxBoostMinSelections,
+      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+    },
+    qualifying.length,
+    combinedOdds
+  );
 
   // Calculate final boost
   const lockedBoostPct = calculateFinalBoost({
@@ -366,7 +387,11 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
 function buildRidePath(
   checkpoints: { checkpointIndex: number; timeOffsetPct: number; baseBoostValue: number }[],
   sampleCount: number,
-  crashPct: number
+  crashPct: number,
+  ticketStrength: number,
+  config: { minBoostPct: number; maxBoostPct: number; maxBoostMinSelections: number | null; maxBoostMinCombinedOdds: number | null },
+  qualifyingSelections: number,
+  combinedOdds: number
 ): RidePathPoint[] {
   if (!checkpoints.length || sampleCount < 2) {
     return [];
@@ -381,10 +406,20 @@ function buildRidePath(
   const points: RidePathPoint[] = [];
   for (let i = 0; i < sampleCount; i++) {
     const timePct = i / (sampleCount - 1);
-    const baseBoostValue = timePct >= crashPct
+    const baseRideValue = timePct >= crashPct
       ? 0
       : interpolateRideValue(normalizedCheckpoints, timePct);
-    points.push({ timePct, baseBoostValue });
+    const effectiveBoost = timePct >= crashPct
+      ? 0
+      : calculateFinalBoost({
+          rideValue: baseRideValue,
+          ticketStrength,
+          qualifyingSelections,
+          combinedOdds,
+          hasRideEnded: false,
+          config,
+        });
+    points.push({ timePct, baseBoostValue: effectiveBoost });
   }
 
   return points;

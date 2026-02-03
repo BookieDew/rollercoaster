@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Combo Boost Rollercoaster - Demo Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f7f2;
+        --ink: #1b1b1b;
+        --muted: #5c5c5c;
+        --panel: #ffffff;
+        --accent: #0f6b5f;
+        --accent-2: #c2a83e;
+        --danger: #b34b3e;
+        --border: #e0ded5;
+        --code: #f1efe6;
+        --shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+        background: radial-gradient(circle at top, #ffffff, var(--bg));
+        color: var(--ink);
+      }
+
+      header {
+        padding: 32px 40px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      header h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+        font-weight: 600;
+      }
+
+      header p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      main {
+        padding: 24px 40px 60px;
+        display: grid;
+        gap: 24px;
+        grid-template-columns: minmax(320px, 1.2fr) minmax(280px, 0.8fr);
+      }
+
+      @media (max-width: 960px) {
+        main {
+          grid-template-columns: 1fr;
+          padding: 20px;
+        }
+      }
+
+      section {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: var(--shadow);
+      }
+
+      section h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 12px;
+      }
+
+      label {
+        font-size: 12px;
+        color: var(--muted);
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: #fff;
+        font-size: 14px;
+      }
+
+      textarea {
+        min-height: 70px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: var(--accent-2);
+        color: #2b2200;
+      }
+
+      button.ghost {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--ink);
+      }
+
+      button.danger {
+        background: var(--danger);
+      }
+
+      pre {
+        background: var(--code);
+        padding: 12px;
+        border-radius: 12px;
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.4;
+        border: 1px solid var(--border);
+      }
+
+      .meta {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .tag {
+        display: inline-flex;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #eef1eb;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status {
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: #f2f4ee;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chart {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: #fcfbf7;
+        padding: 10px;
+      }
+
+      svg {
+        width: 100%;
+        height: 220px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Combo Boost Rollercoaster Demo Console</h1>
+      <p>Local demo for testing eligibility, ride behavior, and lock outcomes.</p>
+    </header>
+
+    <main>
+      <div class="left">
+        <section>
+          <h2>API Settings</h2>
+          <div class="grid">
+            <div>
+              <label>API Base URL</label>
+              <input id="apiBase" placeholder="http://localhost:3000" value="" />
+            </div>
+            <div>
+              <label>X-API-Key</label>
+              <input id="apiKey" placeholder="dev-secret-key" value="dev-secret-key" />
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Profile</h2>
+          <div class="grid">
+            <div>
+              <label>Name</label>
+              <input id="profileName" value="Demo Profile" />
+            </div>
+            <div>
+              <label>Min selections</label>
+              <input id="minSelections" type="number" value="5" />
+            </div>
+            <div>
+              <label>Min combined odds</label>
+              <input id="minCombinedOdds" type="number" step="0.01" value="10" />
+            </div>
+            <div>
+              <label>Min selection odds</label>
+              <input id="minSelectionOdds" type="number" step="0.01" value="1.3" />
+            </div>
+            <div>
+              <label>Min boost %</label>
+              <input id="minBoostPct" type="number" step="0.01" value="0.05" />
+            </div>
+            <div>
+              <label>Max boost %</label>
+              <input id="maxBoostPct" type="number" step="0.01" value="1.0" />
+            </div>
+            <div>
+              <label>Max-boost min selections (optional)</label>
+              <input id="maxBoostMinSelections" type="number" value="10" />
+            </div>
+            <div>
+              <label>Max-boost min combined odds (optional)</label>
+              <input id="maxBoostMinCombinedOdds" type="number" step="0.01" value="50" />
+            </div>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="createProfile">Create Profile</button>
+          </div>
+          <div class="meta" style="margin-top: 10px;">
+            <span class="tag">profile_id</span>
+            <span id="profileId">n/a</span>
+          </div>
+        </section>
+
+        <section>
+          <h2>Reward + Ticket</h2>
+          <div class="grid">
+            <div>
+              <label>User ID</label>
+              <input id="userId" value="user-123" />
+            </div>
+            <div>
+              <label>Bet ID</label>
+              <input id="betId" value="bet-123" />
+            </div>
+          </div>
+          <div style="margin-top: 12px;">
+            <label>Odds list (comma-separated)</label>
+            <textarea id="oddsList">1.50, 1.40, 2.20, 1.25, 3.20, 2.20</textarea>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="grantReward">Grant Reward</button>
+            <button class="ghost" id="precheckEligibility">Precheck Eligibility</button>
+          </div>
+          <div class="meta" style="margin-top: 10px;">
+            <span class="tag">reward_id</span>
+            <span id="rewardId">n/a</span>
+          </div>
+        </section>
+
+        <section>
+          <h2>Ride Controls</h2>
+          <div class="actions">
+            <button id="startRide">Start Ride (Opt-in)</button>
+            <button class="secondary" id="quoteOnce">Get Quote</button>
+            <button class="ghost" id="toggleAutoQuote">Auto Quote (OFF)</button>
+            <button class="danger" id="lockBoost">Stop Ride (Lock)</button>
+          </div>
+          <div class="meta" style="margin-top: 10px;">
+            <span class="status">Elapsed: <span id="elapsedSeconds">0.0</span>s</span>
+            <span class="status">Auto quote: <span id="autoQuoteStatus">OFF</span></span>
+          </div>
+        </section>
+      </div>
+
+      <div class="right">
+        <section>
+          <h2>Latest Response</h2>
+          <pre id="responseBox">{}</pre>
+        </section>
+        <section>
+          <h2>Ride Path (effective)</h2>
+          <div class="chart">
+            <svg id="rideChart" viewBox="0 0 600 220" preserveAspectRatio="none">
+              <polyline id="ridePathLine" fill="none" stroke="#0f6b5f" stroke-width="3" points=""></polyline>
+            </svg>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const state = {
+        autoQuote: false,
+        autoQuoteTimer: null,
+        rideStart: null,
+        rideRunning: false,
+        rafId: null,
+      };
+
+      const responseBox = document.getElementById('responseBox');
+      const ridePathLine = document.getElementById('ridePathLine');
+      const elapsedSeconds = document.getElementById('elapsedSeconds');
+      const autoQuoteStatus = document.getElementById('autoQuoteStatus');
+
+      function getApiBase() {
+        const base = document.getElementById('apiBase').value.trim();
+        return base ? base.replace(/\/$/, '') : '';
+      }
+
+      function getApiKey() {
+        return document.getElementById('apiKey').value.trim();
+      }
+
+      function setResponse(payload) {
+        responseBox.textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function apiFetch(path, method, body) {
+        const base = getApiBase();
+        const url = `${base}${path}`;
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+        const apiKey = getApiKey();
+        if (apiKey) {
+          headers['X-API-Key'] = apiKey;
+        }
+        return fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        }).then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const err = new Error(data.message || 'Request failed');
+            err.payload = data;
+            throw err;
+          }
+          return data;
+        });
+      }
+
+      function parseOdds() {
+        const raw = document.getElementById('oddsList').value;
+        const parts = raw.split(/[\s,]+/).filter(Boolean);
+        return parts.map((value, index) => ({
+          id: `s${index + 1}`,
+          odds: parseFloat(value),
+        })).filter((sel) => !Number.isNaN(sel.odds));
+      }
+
+      function buildTicket() {
+        return { selections: parseOdds() };
+      }
+
+      function renderRidePath(points) {
+        if (!points || points.length === 0) {
+          ridePathLine.setAttribute('points', '');
+          return;
+        }
+        const width = 600;
+        const height = 220;
+        const maxValue = Math.max(...points.map((p) => p.baseBoostValue), 0.001);
+        const coords = points.map((p) => {
+          const x = p.timePct * width;
+          const y = height - (p.baseBoostValue / maxValue) * (height - 10) - 5;
+          return `${x.toFixed(2)},${y.toFixed(2)}`;
+        });
+        ridePathLine.setAttribute('points', coords.join(' '));
+      }
+
+      function getValue(id) {
+        return document.getElementById(id).value;
+      }
+
+      function setText(id, value) {
+        document.getElementById(id).textContent = value || 'n/a';
+      }
+
+      function updateElapsed() {
+        if (!state.rideStart) {
+          elapsedSeconds.textContent = '0.0';
+          return;
+        }
+        const seconds = (performance.now() - state.rideStart) / 1000;
+        elapsedSeconds.textContent = seconds.toFixed(1);
+      }
+
+      function startElapsedTimer() {
+        resetElapsedTimer();
+        state.rideStart = performance.now();
+        state.rideRunning = true;
+        const tick = () => {
+          if (!state.rideRunning) {
+            return;
+          }
+          updateElapsed();
+          state.rafId = requestAnimationFrame(tick);
+        };
+        state.rafId = requestAnimationFrame(tick);
+      }
+
+      function stopElapsedTimer() {
+        state.rideRunning = false;
+        if (state.rafId) {
+          cancelAnimationFrame(state.rafId);
+          state.rafId = null;
+        }
+      }
+
+      function resetElapsedTimer() {
+        stopElapsedTimer();
+        state.rideStart = null;
+        elapsedSeconds.textContent = '0.0';
+      }
+
+      function setAutoQuote(enabled) {
+        state.autoQuote = enabled;
+        autoQuoteStatus.textContent = state.autoQuote ? 'ON' : 'OFF';
+        document.getElementById('toggleAutoQuote').textContent = `Auto Quote (${state.autoQuote ? 'ON' : 'OFF'})`;
+
+        if (state.autoQuote) {
+          state.autoQuoteTimer = setInterval(() => {
+            document.getElementById('quoteOnce').click();
+          }, 200);
+        } else if (state.autoQuoteTimer) {
+          clearInterval(state.autoQuoteTimer);
+          state.autoQuoteTimer = null;
+        }
+      }
+
+      function generateBetId() {
+        return `bet-${Date.now()}`;
+      }
+
+      document.getElementById('createProfile').addEventListener('click', async () => {
+        const payload = {
+          name: getValue('profileName'),
+          min_selections: Number(getValue('minSelections')),
+          min_combined_odds: Number(getValue('minCombinedOdds')),
+          min_selection_odds: Number(getValue('minSelectionOdds')),
+          min_boost_pct: Number(getValue('minBoostPct')),
+          max_boost_pct: Number(getValue('maxBoostPct')),
+          max_boost_min_selections: getValue('maxBoostMinSelections')
+            ? Number(getValue('maxBoostMinSelections'))
+            : undefined,
+          max_boost_min_combined_odds: getValue('maxBoostMinCombinedOdds')
+            ? Number(getValue('maxBoostMinCombinedOdds'))
+            : undefined,
+          ride_duration_seconds: 3600,
+        };
+
+        try {
+          const data = await apiFetch('/api/profiles', 'POST', payload);
+          setText('profileId', data.id);
+          setResponse(data);
+        } catch (err) {
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+
+      document.getElementById('grantReward').addEventListener('click', async () => {
+        const payload = {
+          user_id: getValue('userId'),
+          profile_version_id: document.getElementById('profileId').textContent.trim(),
+        };
+        try {
+          const data = await apiFetch('/api/rewards', 'POST', payload);
+          setText('rewardId', data.id);
+          document.getElementById('betId').value = generateBetId();
+          resetElapsedTimer();
+          setAutoQuote(false);
+          setResponse(data);
+        } catch (err) {
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+
+      document.getElementById('precheckEligibility').addEventListener('click', async () => {
+        const rewardId = document.getElementById('rewardId').textContent.trim();
+        const payload = {
+          user_id: getValue('userId'),
+          ticket: buildTicket(),
+        };
+        try {
+          const data = await apiFetch(`/api/rewards/${rewardId}/eligibility`, 'POST', payload);
+          setResponse(data);
+        } catch (err) {
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+
+      document.getElementById('startRide').addEventListener('click', async () => {
+        const rewardId = document.getElementById('rewardId').textContent.trim();
+        if (!getValue('betId')) {
+          document.getElementById('betId').value = generateBetId();
+        }
+        const payload = {
+          user_id: getValue('userId'),
+          bet_id: getValue('betId'),
+          ticket: buildTicket(),
+        };
+        try {
+          const data = await apiFetch(`/api/rewards/${rewardId}/opt-in`, 'POST', payload);
+          startElapsedTimer();
+          setResponse(data);
+        } catch (err) {
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+
+      document.getElementById('quoteOnce').addEventListener('click', async () => {
+        const rewardId = document.getElementById('rewardId').textContent.trim();
+        const payload = {
+          user_id: getValue('userId'),
+          reward_id: rewardId,
+          bet_id: getValue('betId'),
+        };
+        try {
+          const data = await apiFetch('/api/boost/quote', 'POST', payload);
+          if (data.reason_code === 'RIDE_CRASHED' || data.reason_code === 'RIDE_ENDED') {
+            stopElapsedTimer();
+            setAutoQuote(false);
+          }
+          setResponse(data);
+        } catch (err) {
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+
+      document.getElementById('toggleAutoQuote').addEventListener('click', () => {
+        setAutoQuote(!state.autoQuote);
+      });
+
+      document.getElementById('lockBoost').addEventListener('click', async () => {
+        const rewardId = document.getElementById('rewardId').textContent.trim();
+        const payload = {
+          user_id: getValue('userId'),
+          reward_id: rewardId,
+          bet_id: getValue('betId'),
+        };
+        try {
+          const data = await apiFetch('/api/boost/lock', 'POST', payload);
+          stopElapsedTimer();
+          setAutoQuote(false);
+          renderRidePath(data.ride_path || []);
+          setResponse(data);
+        } catch (err) {
+          if (err.payload && (err.payload.code === 'RIDE_CRASHED' || err.payload.code === 'RIDE_ENDED')) {
+            stopElapsedTimer();
+            setAutoQuote(false);
+          }
+          setResponse(err.payload || { error: err.message });
+        }
+      });
+    </script>
+  </body>
+</html>

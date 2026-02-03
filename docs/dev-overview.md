@@ -8,6 +8,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - `src/routes/` - HTTP routes
 - `src/services/` - business logic
 - `src/computations/` - core math (ticket strength, ride generation, boost calculation)
+- `public/demo/index.html` - local demo UI (served at `/demo`)
 
 ## End-to-end flow (high level)
 1) CRM grants reward token
@@ -19,7 +20,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 7) On loss, bonus = 0
 
 ## Key behaviors
-- Ride duration is short (0.5–10 seconds), crash can happen anytime.
+- Ride duration is short (2–15 seconds), crash can happen anytime.
 - No time remaining is returned to bettors.
 - Deterministic ride based on seed (reward_id + user_id + profile_version).
 - Single-use reward: lock consumes the token.
@@ -38,4 +39,10 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 ## Running tests
 ```
 npm run test:all
+```
+
+## Demo UI
+Run the API and open:
+```
+http://localhost:3000/demo
 ```

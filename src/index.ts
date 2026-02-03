@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
@@ -15,6 +16,9 @@ app.use(express.json({
 
 // Request logging
 app.use(requestLogger);
+
+// Demo UI (local use)
+app.use('/demo', express.static(path.join(__dirname, '../public/demo')));
 
 // Mount all routes
 app.use('/api', routes);
