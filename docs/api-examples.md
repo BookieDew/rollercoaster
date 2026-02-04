@@ -179,6 +179,10 @@ Response: 204 No Content
 
 ## Rewards
 
+Selections can include optional flags to exclude them from qualification:
+`eligible: false` and optional `ineligible_reason` (e.g., BOOSTED_ODDS, ZERO_MARGIN).
+Excluded selections do not count toward qualifying selection count or combined odds.
+
 ### Grant Reward
 
 **POST** `/api/rewards`
@@ -216,7 +220,7 @@ Response: 204 No Content
   "ticket": {
     "selections": [
       { "id": "sel-001", "odds": 1.85 },
-      { "id": "sel-002", "odds": 2.10 },
+      { "id": "sel-002", "odds": 2.10, "eligible": false, "ineligible_reason": "BOOSTED_ODDS" },
       { "id": "sel-003", "odds": 1.65 }
     ]
   }
@@ -411,7 +415,12 @@ Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes ca
   "theoretical_max_boost_pct": 0.62,
   "ticket_strength": 0.42,
   "ride_end_at_offset_seconds": 9.4,
-  "ride_crash_at_offset_seconds": 5.8
+  "ride_crash_at_offset_seconds": 5.8,
+  "ride_path": [
+    { "time_pct": 0, "base_boost_value": 0.31 },
+    { "time_pct": 0.02, "base_boost_value": 0.33 },
+    { "time_pct": 1, "base_boost_value": 0 }
+  ]
 }
 
 // Response (200 OK) - Ride Ended (no crash)
@@ -425,7 +434,12 @@ Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes ca
   "theoretical_max_boost_pct": 0.62,
   "ticket_strength": 0.42,
   "ride_end_at_offset_seconds": 9.4,
-  "ride_crash_at_offset_seconds": 5.8
+  "ride_crash_at_offset_seconds": 5.8,
+  "ride_path": [
+    { "time_pct": 0, "base_boost_value": 0.31 },
+    { "time_pct": 0.02, "base_boost_value": 0.33 },
+    { "time_pct": 1, "base_boost_value": 0 }
+  ]
 }
 ```
 

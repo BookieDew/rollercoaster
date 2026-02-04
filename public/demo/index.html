@@ -262,8 +262,8 @@
             </div>
           </div>
           <div style="margin-top: 12px;">
-            <label>Odds list (comma-separated)</label>
-            <textarea id="oddsList">1.50, 1.40, 2.20, 1.25, 3.20, 2.20</textarea>
+            <label>Odds list (comma-separated). Add (E) or a reason to exclude, e.g. 1.40 (BOOSTED)</label>
+            <textarea id="oddsList">1.50, 1.40 (E), 2.20, 1.25, 3.20, 2.20</textarea>
           </div>
           <div class="actions" style="margin-top: 12px;">
             <button id="grantReward">Grant Reward</button>
@@ -331,6 +331,11 @@
 
       function setResponse(payload) {
         responseBox.textContent = JSON.stringify(payload, null, 2);
+        if (payload && payload.ride_path) {
+          renderRidePath(payload.ride_path);
+        } else if (payload && payload.details && payload.details.ride_path) {
+          renderRidePath(payload.details.ride_path);
+        }
       }
 
       function apiFetch(path, method, body) {
@@ -360,11 +365,24 @@
 
       function parseOdds() {
         const raw = document.getElementById('oddsList').value;
-        const parts = raw.split(/[\s,]+/).filter(Boolean);
-        return parts.map((value, index) => ({
-          id: `s${index + 1}`,
-          odds: parseFloat(value),
-        })).filter((sel) => !Number.isNaN(sel.odds));
+        const parts = raw.split(/[\n,]+/).map((part) => part.trim()).filter(Boolean);
+        return parts.map((value, index) => {
+          const numberMatch = value.match(/^\s*([0-9]*\.?[0-9]+)/);
+          if (!numberMatch) {
+            return null;
+          }
+          const odds = parseFloat(numberMatch[1]);
+          const reasonMatch = value.match(/\(([^)]+)\)/);
+          const remainder = value.slice(numberMatch[0].length).trim();
+          const reason = (reasonMatch?.[1] || remainder).trim();
+          const excluded = reason.length > 0;
+          return {
+            id: `s${index + 1}`,
+            odds,
+            eligible: !excluded,
+            ineligible_reason: excluded ? reason.toUpperCase() : undefined,
+          };
+        }).filter((sel) => sel && !Number.isNaN(sel.odds));
       }
 
       function buildTicket() {

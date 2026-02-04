@@ -1,4 +1,5 @@
 import type { Selection } from './ticket';
+import type { RidePathPoint } from './ride';
 
 export interface BetBoostLock {
   id: string;
@@ -39,11 +40,6 @@ export interface LockSnapshot {
   maxEligibleBoostPct: number;
   maxPossibleBoostPct: number;
   ridePath: RidePathPoint[];
-}
-
-export interface RidePathPoint {
-  timePct: number;
-  baseBoostValue: number;
 }
 
 export interface CreateBetBoostLockInput {

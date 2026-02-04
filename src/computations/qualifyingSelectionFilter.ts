@@ -21,6 +21,11 @@ export function filterQualifyingSelections(
   const disqualified: Selection[] = [];
 
   for (const selection of selections) {
+    if (selection.eligible === false || Boolean(selection.ineligible_reason)) {
+      disqualified.push(selection);
+      continue;
+    }
+
     if (selection.odds >= minSelectionOdds) {
       qualifying.push(selection);
     } else {

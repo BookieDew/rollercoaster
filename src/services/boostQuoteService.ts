@@ -12,8 +12,10 @@ import {
   hasRideEnded as checkRideEnded,
   calculateFinalBoost,
   deriveCrashPct,
+  buildEffectiveRidePath,
 } from '../computations';
 import type { Selection, QuoteResponse } from '../types/ticket';
+import type { RidePathPoint } from '../types/ride';
 import { ReasonCode, type EligibilityReasonCode } from '../types/reasonCodes';
 import { config } from '../config';
 
@@ -179,6 +181,20 @@ export async function getQuote(
     elapsedPct
   );
   const maxRideValue = getMaxRideValue(checkpoints, crashPct);
+  const ridePath = buildEffectiveRidePath(
+    checkpoints,
+    60,
+    crashPct,
+    ticketStrength,
+    {
+      minBoostPct: profile.minBoostPct,
+      maxBoostPct: profile.maxBoostPct,
+      maxBoostMinSelections: profile.maxBoostMinSelections,
+      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+    },
+    qualifying.length,
+    combinedOdds
+  );
 
   // Calculate final boost
   const currentBoostPct = calculateFinalBoost({
@@ -219,6 +235,7 @@ export async function getQuote(
         combinedOdds,
         ticketStrength,
         theoreticalMaxBoostPct,
+        ridePath,
         endOffsetSeconds,
         crashOffsetSeconds
       ),
@@ -234,6 +251,7 @@ export async function getQuote(
         combinedOdds,
         ticketStrength,
         theoreticalMaxBoostPct,
+        ridePath,
         endOffsetSeconds,
         crashOffsetSeconds
       ),
@@ -286,6 +304,7 @@ function buildRideEndedResponse(
   combinedOdds: number,
   ticketStrength: number,
   theoreticalMaxBoostPct: number,
+  ridePath: RidePathPoint[],
   endOffsetSeconds: number,
   crashOffsetSeconds: number
 ): QuoteResponse {
@@ -300,6 +319,7 @@ function buildRideEndedResponse(
     ticket_strength: ticketStrength,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
+    ride_path: ridePath,
   };
 }
 

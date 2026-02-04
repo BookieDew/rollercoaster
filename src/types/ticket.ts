@@ -1,4 +1,5 @@
 import type { EligibilityReasonCode } from './reasonCodes';
+import type { RidePathPoint } from './ride';
 
 export interface Selection {
   id: string;
@@ -6,6 +7,8 @@ export interface Selection {
   name?: string;
   market?: string;
   event?: string;
+  eligible?: boolean;
+  ineligible_reason?: string;
 }
 
 export interface Ticket {
@@ -30,6 +33,7 @@ export interface QuoteResponse {
   ticket_strength: number | null;
   ride_end_at_offset_seconds?: number | null;
   ride_crash_at_offset_seconds?: number | null;
+  ride_path?: RidePathPoint[];
 }
 
 export interface QualifyingResult {

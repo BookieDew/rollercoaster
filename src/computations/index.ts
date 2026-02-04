@@ -39,3 +39,7 @@ export {
   type FinalBoostConfig,
   type FinalBoostInput,
 } from './finalBoostCalculator';
+
+export {
+  buildEffectiveRidePath,
+} from './ridePathBuilder';

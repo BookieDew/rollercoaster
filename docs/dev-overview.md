@@ -27,6 +27,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - Optional max-boost thresholds: `max_boost_min_selections`, `max_boost_min_combined_odds`.
 - Responses distinguish `RIDE_CRASHED` vs `RIDE_ENDED`.
 - Ride path is returned only after lock (for UI animation/sharing).
+- Selections can be excluded via `eligible: false` (optional `ineligible_reason`).
 
 ## Core modules (what to review)
 - `src/computations/ticketStrengthScorer.ts` (non-linear strength)

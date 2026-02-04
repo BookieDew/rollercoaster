@@ -7,6 +7,8 @@ export const selectionSchema = z.object({
   name: z.string().optional(),
   market: z.string().optional(),
   event: z.string().optional(),
+  eligible: z.boolean().optional(),
+  ineligible_reason: z.string().max(200).optional(),
 });
 
 // Ticket schema

@@ -15,8 +15,9 @@ import {
   calculateFinalBoost,
   deriveRideParams,
   computeMaxEligibleBoostPct,
+  buildEffectiveRidePath,
 } from '../computations';
-import type { BetBoostLock, LockResponse, RidePathPoint } from '../types/betBoostLock';
+import type { BetBoostLock, LockResponse } from '../types/betBoostLock';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
 import { config } from '../config';
@@ -135,34 +136,6 @@ export async function lockBoost(
   const checkpointCount = derived.checkpointCount;
   const volatility = derived.volatility;
 
-  // Check if ride has crashed or ended
-  if (elapsedPct >= crashPct) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.RIDE_CRASHED,
-        message: 'Ride has crashed - boost is zero',
-        details: {
-          ride_end_at_offset_seconds: endOffsetSeconds,
-          ride_crash_at_offset_seconds: crashOffsetSeconds,
-        },
-      },
-    };
-  }
-  if (checkRideEnded(reward.startTime, reward.endTime)) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.RIDE_ENDED,
-        message: 'Ride has ended - boost is zero',
-        details: {
-          ride_end_at_offset_seconds: endOffsetSeconds,
-          ride_crash_at_offset_seconds: crashOffsetSeconds,
-        },
-      },
-    };
-  }
-
   // Get profile for eligibility thresholds
   const profile = await rewardProfileRepository.findById(reward.profileVersionId);
   if (!profile) {
@@ -223,7 +196,7 @@ export async function lockBoost(
     elapsedPct
   );
 
-  const ridePath = buildRidePath(
+  const ridePath = buildEffectiveRidePath(
     checkpoints,
     60,
     crashPct,
@@ -276,6 +249,47 @@ export async function lockBoost(
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
     }
   );
+
+  if (elapsedPct >= crashPct) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.RIDE_CRASHED,
+        message: 'Ride has crashed - boost is zero',
+        details: {
+          ride_end_at_offset_seconds: endOffsetSeconds,
+          ride_crash_at_offset_seconds: crashOffsetSeconds,
+          qualifying_selection_count: qualifying.length,
+          total_selection_count: storedSelections.length,
+          combined_odds: combinedOdds,
+          current_boost_pct: 0,
+          theoretical_max_boost_pct: maxPossibleBoostPct,
+          ticket_strength: ticketStrength,
+          ride_path: ridePath,
+        },
+      },
+    };
+  }
+  if (checkRideEnded(reward.startTime, reward.endTime)) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.RIDE_ENDED,
+        message: 'Ride has ended - boost is zero',
+        details: {
+          ride_end_at_offset_seconds: endOffsetSeconds,
+          ride_crash_at_offset_seconds: crashOffsetSeconds,
+          qualifying_selection_count: qualifying.length,
+          total_selection_count: storedSelections.length,
+          combined_odds: combinedOdds,
+          current_boost_pct: 0,
+          theoretical_max_boost_pct: maxPossibleBoostPct,
+          ticket_strength: ticketStrength,
+          ride_path: ridePath,
+        },
+      },
+    };
+  }
 
   // Create the lock record
   const lock = await betBoostLockRepository.create({
@@ -382,47 +396,6 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
     ),
     ride_path: lock.snapshot.ridePath,
   };
-}
-
-function buildRidePath(
-  checkpoints: { checkpointIndex: number; timeOffsetPct: number; baseBoostValue: number }[],
-  sampleCount: number,
-  crashPct: number,
-  ticketStrength: number,
-  config: { minBoostPct: number; maxBoostPct: number; maxBoostMinSelections: number | null; maxBoostMinCombinedOdds: number | null },
-  qualifyingSelections: number,
-  combinedOdds: number
-): RidePathPoint[] {
-  if (!checkpoints.length || sampleCount < 2) {
-    return [];
-  }
-
-  const normalizedCheckpoints = checkpoints.map((cp) => ({
-    index: cp.checkpointIndex,
-    timeOffsetPct: cp.timeOffsetPct,
-    baseBoostValue: cp.baseBoostValue,
-  }));
-
-  const points: RidePathPoint[] = [];
-  for (let i = 0; i < sampleCount; i++) {
-    const timePct = i / (sampleCount - 1);
-    const baseRideValue = timePct >= crashPct
-      ? 0
-      : interpolateRideValue(normalizedCheckpoints, timePct);
-    const effectiveBoost = timePct >= crashPct
-      ? 0
-      : calculateFinalBoost({
-          rideValue: baseRideValue,
-          ticketStrength,
-          qualifyingSelections,
-          combinedOdds,
-          hasRideEnded: false,
-          config,
-        });
-    points.push({ timePct, baseBoostValue: effectiveBoost });
-  }
-
-  return points;
 }
 
 function getMaxRideValue(
