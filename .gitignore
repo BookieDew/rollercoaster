@@ -1,5 +1,6 @@
 docs/*.local.md
 node_modules/
+dist/
 dev.db
 .env
 .env.*
