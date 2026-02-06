@@ -78,7 +78,7 @@ export async function simulateRide(
   );
   const derived = deriveRideParams(seed, durationSeconds, config.ride.minCrashSeconds);
 
-  let config: {
+  let simulationConfig: {
     checkpointCount: number;
     volatility: number;
     crashPct: number;
@@ -112,7 +112,7 @@ export async function simulateRide(
       };
     }
 
-    config = {
+    simulationConfig = {
       checkpointCount: derived.checkpointCount,
       volatility: derived.volatility,
       crashPct: derived.crashPct,
@@ -126,14 +126,12 @@ export async function simulateRide(
     minCombinedOdds = profile.minCombinedOdds;
   }
 
-  // Generate ride
-  const ride = generateRide(seed, config);
-
   // Analyze ticket if provided
   let ticketAnalysis: SimulationResult['ticket_analysis'];
   let ticketStrength = 0.5; // Default for simulation without ticket
-  let qualifyingSelectionsForBoost = config.maxBoostMinSelections ?? minSelections;
-  let combinedOddsForBoost = config.maxBoostMinCombinedOdds ?? minCombinedOdds;
+  let qualifyingSelectionsForBoost = simulationConfig.maxBoostMinSelections ?? minSelections;
+  let combinedOddsForBoost = simulationConfig.maxBoostMinCombinedOdds ?? minCombinedOdds;
+  let rideTicketStrength = 0;
 
   if (input.ticket && input.ticket.selections.length > 0) {
     const { qualifying } = filterQualifyingSelections(
@@ -144,6 +142,7 @@ export async function simulateRide(
     ticketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
       minSelections,
     });
+    rideTicketStrength = ticketStrength;
     qualifyingSelectionsForBoost = qualifying.length;
     combinedOddsForBoost = combinedOdds;
 
@@ -154,13 +153,22 @@ export async function simulateRide(
     };
   }
 
+  // Generate ride
+  const ride = generateRide(seed, {
+    ...simulationConfig,
+    ticketStrength: rideTicketStrength,
+    durationSeconds,
+    crashPct: simulationConfig.crashPct,
+    minPeakDelaySeconds: 2,
+  });
+
   // Generate sample curve points
   const samplePoints = input.samplePoints ?? 100;
   const curve: SimulationPoint[] = [];
 
   for (let i = 0; i <= samplePoints; i++) {
     const timePct = i / samplePoints;
-    const baseRideValue = timePct >= config.crashPct
+    const baseRideValue = timePct >= simulationConfig.crashPct
       ? 0
       : interpolateRideValue(
           ride.checkpoints.map((cp) => ({
@@ -171,7 +179,7 @@ export async function simulateRide(
           timePct
         );
 
-    const hasEnded = timePct >= config.crashPct;
+    const hasEnded = timePct >= simulationConfig.crashPct;
     const finalBoostPct = hasEnded
       ? 0
       : calculateFinalBoost({
@@ -181,10 +189,10 @@ export async function simulateRide(
           combinedOdds: combinedOddsForBoost,
           hasRideEnded: false,
           config: {
-            minBoostPct: config.minBoostPct,
-            maxBoostPct: config.maxBoostPct,
-            maxBoostMinSelections: config.maxBoostMinSelections,
-            maxBoostMinCombinedOdds: config.maxBoostMinCombinedOdds,
+            minBoostPct: simulationConfig.minBoostPct,
+            maxBoostPct: simulationConfig.maxBoostPct,
+            maxBoostMinSelections: simulationConfig.maxBoostMinSelections,
+            maxBoostMinCombinedOdds: simulationConfig.maxBoostMinCombinedOdds,
           },
         });
 
@@ -200,13 +208,13 @@ export async function simulateRide(
     data: {
       seed,
       config: {
-        checkpoint_count: config.checkpointCount,
-        volatility: config.volatility,
-        crash_pct: config.crashPct,
-        min_boost_pct: config.minBoostPct,
-        max_boost_pct: config.maxBoostPct,
-        max_boost_min_selections: config.maxBoostMinSelections,
-        max_boost_min_combined_odds: config.maxBoostMinCombinedOdds,
+        checkpoint_count: simulationConfig.checkpointCount,
+        volatility: simulationConfig.volatility,
+        crash_pct: simulationConfig.crashPct,
+        min_boost_pct: simulationConfig.minBoostPct,
+        max_boost_pct: simulationConfig.maxBoostPct,
+        max_boost_min_selections: simulationConfig.maxBoostMinSelections,
+        max_boost_min_combined_odds: simulationConfig.maxBoostMinCombinedOdds,
       },
       ticket_analysis: ticketAnalysis,
       checkpoints: ride.checkpoints.map((cp) => ({

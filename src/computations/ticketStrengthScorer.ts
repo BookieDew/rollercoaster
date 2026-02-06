@@ -6,12 +6,13 @@
  * 1. More qualifying selections
  * 2. Higher combined odds
  *
- * Score = selectionFactor^exponent * oddsFactor^exponent
+ * Score = (selectionFactor^exponent)^selectionWeight * (oddsFactor^exponent)^oddsWeight
  *
  * Where:
  * - selectionFactor = (qualifyingCount - minSelections + 1) / normalizer
  * - oddsFactor = log(combinedOdds) / log(baseOdds)
  * - exponent = 1.5 (creates convex/parabolic curve)
+ * - default weights are 75% selections, 25% odds
  */
 
 export interface TicketStrengthConfig {
@@ -23,6 +24,10 @@ export interface TicketStrengthConfig {
   exponent?: number;
   /** Maximum selection bonus factor (default: 10) */
   maxSelectionBonus?: number;
+  /** Weight assigned to selection component (default: 0.75) */
+  selectionWeight?: number;
+  /** Weight assigned to odds component (default: 0.25) */
+  oddsWeight?: number;
 }
 
 /**
@@ -31,7 +36,7 @@ export interface TicketStrengthConfig {
  * @param qualifyingCount - Number of qualifying selections
  * @param combinedOdds - Combined odds of qualifying selections
  * @param config - Configuration parameters
- * @returns Ticket strength score (0 to ~1, can exceed 1 for very strong tickets)
+ * @returns Ticket strength score (0 to 1)
  */
 export function computeTicketStrength(
   qualifyingCount: number,
@@ -43,6 +48,8 @@ export function computeTicketStrength(
     baseOdds = 3.0,
     exponent = 1.5,
     maxSelectionBonus = 10,
+    selectionWeight = 0.75,
+    oddsWeight = 0.25,
   } = config;
 
   if (qualifyingCount < minSelections || combinedOdds <= 1) {
@@ -58,8 +65,19 @@ export function computeTicketStrength(
   // Higher odds = higher factor, using log to prevent extreme values
   const oddsFactor = Math.log(combinedOdds) / Math.log(baseOdds * 100);
 
-  // Combine factors with convex curve (exponent > 1)
-  const rawStrength = Math.pow(selectionFactor, exponent) * Math.pow(Math.max(oddsFactor, 0.1), exponent);
+  // Normalize weights defensively so callers can override without needing exact sums.
+  const safeSelectionWeight = Math.max(selectionWeight, 0);
+  const safeOddsWeight = Math.max(oddsWeight, 0);
+  const weightSum = safeSelectionWeight + safeOddsWeight;
+  const normalizedSelectionWeight = weightSum > 0 ? safeSelectionWeight / weightSum : 0.75;
+  const normalizedOddsWeight = weightSum > 0 ? safeOddsWeight / weightSum : 0.25;
+
+  // Blend convex components with explicit selection/odds weighting.
+  const selectionComponent = Math.pow(selectionFactor, exponent);
+  const oddsComponent = Math.pow(Math.max(oddsFactor, 0.1), exponent);
+  const rawStrength =
+    Math.pow(selectionComponent, normalizedSelectionWeight) *
+    Math.pow(oddsComponent, normalizedOddsWeight);
 
   // Normalize to 0-1 range (approximately)
   const normalizedStrength = Math.min(rawStrength, 1);

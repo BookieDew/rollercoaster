@@ -104,6 +104,10 @@ export async function getLock(
       ticket_strength: result.data.ticketStrength,
       locked_at: result.data.lockedAt,
       theoretical_max_boost_pct: result.data.snapshot.maxPossibleBoostPct,
+      ride_stop_at_offset_seconds: roundToDecimals(
+        result.data.snapshot.rideDurationSeconds * result.data.snapshot.elapsedPct,
+        3
+      ),
       ride_end_at_offset_seconds: roundToDecimals(result.data.snapshot.rideDurationSeconds, 3),
       ride_crash_at_offset_seconds: roundToDecimals(
         result.data.snapshot.rideDurationSeconds * result.data.snapshot.crashPct,

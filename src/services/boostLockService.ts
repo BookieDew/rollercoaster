@@ -389,6 +389,10 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
     ticket_strength: lock.ticketStrength,
     locked_at: lock.lockedAt,
     theoretical_max_boost_pct: lock.snapshot.maxPossibleBoostPct,
+    ride_stop_at_offset_seconds: roundToDecimals(
+      lock.snapshot.rideDurationSeconds * lock.snapshot.elapsedPct,
+      3
+    ),
     ride_end_at_offset_seconds: roundToDecimals(lock.snapshot.rideDurationSeconds, 3),
     ride_crash_at_offset_seconds: roundToDecimals(
       lock.snapshot.rideDurationSeconds * lock.snapshot.crashPct,

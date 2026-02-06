@@ -9,6 +9,9 @@ on winning tickets only. Stake and odds are never modified.
 ## Why it works
 - Creates urgency: the boost changes in real time and can crash without warning.
 - Rewards strong tickets: more qualifying selections and higher combined odds yield better boosts.
+- Ticket strength prioritizes margin multiplication: 75% weight on selection count, 25% on combined odds.
+- Stronger tickets are more likely to open on an upswing.
+- Ride generation avoids instant "best-at-start" outcomes by keeping the first theoretical peak at least 2 seconds in.
 - Low operational risk: boosts are capped and apply only to winnings.
 
 ## Business value

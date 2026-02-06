@@ -23,6 +23,9 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - Ride duration is short (2–15 seconds), crash can happen anytime.
 - No time remaining is returned to bettors.
 - Deterministic ride based on seed (reward_id + user_id + profile_version).
+- Ticket strength weighting is `75%` qualifying selection count and `25%` combined odds.
+- Stronger tickets are more likely to start on an upswing.
+- Earliest theoretical ride peak is constrained to be at least 2 seconds after start (when timing allows).
 - Single-use reward: lock consumes the token.
 - Optional max-boost thresholds: `max_boost_min_selections`, `max_boost_min_combined_odds`.
 - Responses distinguish `RIDE_CRASHED` vs `RIDE_ENDED`.

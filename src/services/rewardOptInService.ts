@@ -247,6 +247,10 @@ export async function optIn(
     volatility: derived.volatility,
     minBoostPct: profile.minBoostPct,
     maxBoostPct: profile.maxBoostPct,
+    ticketStrength,
+    durationSeconds,
+    crashPct: derived.crashPct,
+    minPeakDelaySeconds: 2,
   });
 
   // Start ride timing now (short duration)

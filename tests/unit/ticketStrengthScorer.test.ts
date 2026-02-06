@@ -37,6 +37,24 @@ describe('ticketStrengthScorer', () => {
       expect(strengthHighOdds).toBeGreaterThan(strengthMedOdds);
     });
 
+    it('should default to 75/25 weighting (selections/odds)', () => {
+      const defaultScore = computeTicketStrength(7, 25.0, baseConfig);
+      const explicitScore = computeTicketStrength(7, 25.0, {
+        ...baseConfig,
+        selectionWeight: 0.75,
+        oddsWeight: 0.25,
+      });
+
+      expect(defaultScore).toBeCloseTo(explicitScore, 6);
+    });
+
+    it('should favor selection-heavy tickets over odds-heavy tickets by default', () => {
+      const selectionHeavyScore = computeTicketStrength(10, 12.0, baseConfig);
+      const oddsHeavyScore = computeTicketStrength(4, 400.0, baseConfig);
+
+      expect(selectionHeavyScore).toBeGreaterThan(oddsHeavyScore);
+    });
+
     it('should demonstrate non-linear (convex) scaling', () => {
       // Test that the increase is disproportionate (convex curve)
       const s1 = computeTicketStrength(4, 10.0, baseConfig);

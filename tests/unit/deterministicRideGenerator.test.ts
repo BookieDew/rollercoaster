@@ -105,6 +105,62 @@ describe('deterministicRideGenerator', () => {
       expect(increases).toBeGreaterThan(0);
       expect(decreases).toBeGreaterThan(0);
     });
+
+    it('should bias opening direction upward for stronger tickets', () => {
+      const samples = 3000;
+      let weakStartsUp = 0;
+      let strongStartsUp = 0;
+
+      for (let i = 0; i < samples; i++) {
+        const seed = `start-bias-${i}`;
+        const weakRide = generateRide(seed, {
+          ...config,
+          ticketStrength: 0,
+          durationSeconds: 10,
+          crashPct: 0.8,
+          minPeakDelaySeconds: 2,
+        });
+        const strongRide = generateRide(seed, {
+          ...config,
+          ticketStrength: 1,
+          durationSeconds: 10,
+          crashPct: 0.8,
+          minPeakDelaySeconds: 2,
+        });
+
+        if (weakRide.checkpoints[1].baseBoostValue > weakRide.checkpoints[0].baseBoostValue) {
+          weakStartsUp++;
+        }
+        if (strongRide.checkpoints[1].baseBoostValue > strongRide.checkpoints[0].baseBoostValue) {
+          strongStartsUp++;
+        }
+      }
+
+      expect(strongStartsUp).toBeGreaterThan(weakStartsUp);
+    });
+
+    it('should keep first peak at least 2 seconds from start when duration is provided', () => {
+      const durationSeconds = 10;
+      const crashPct = 0.85;
+      const minPeakDelaySeconds = 2;
+      const minAllowedPct = minPeakDelaySeconds / durationSeconds;
+
+      for (let i = 0; i < 500; i++) {
+        const ride = generateRide(`peak-delay-${i}`, {
+          ...config,
+          durationSeconds,
+          crashPct,
+          minPeakDelaySeconds,
+        });
+
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        const maxValue = Math.max(...preCrash.map((cp) => cp.baseBoostValue));
+        const earliestPeak = preCrash.find((cp) => cp.baseBoostValue === maxValue);
+
+        expect(earliestPeak).toBeDefined();
+        expect((earliestPeak?.timeOffsetPct ?? 0)).toBeGreaterThanOrEqual(minAllowedPct);
+      }
+    });
   });
 
   describe('interpolateRideValue', () => {

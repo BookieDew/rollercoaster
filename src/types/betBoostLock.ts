@@ -68,6 +68,7 @@ export interface LockResponse {
   ticket_strength: number;
   locked_at: string;
   theoretical_max_boost_pct: number;
+  ride_stop_at_offset_seconds: number;
   ride_end_at_offset_seconds: number;
   ride_crash_at_offset_seconds: number;
   ride_path: RidePathPoint[];

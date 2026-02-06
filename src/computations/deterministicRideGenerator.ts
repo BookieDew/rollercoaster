@@ -11,6 +11,10 @@ export interface RideConfig {
   volatility: number;
   minBoostPct: number;
   maxBoostPct: number;
+  ticketStrength?: number;
+  durationSeconds?: number;
+  crashPct?: number;
+  minPeakDelaySeconds?: number;
 }
 
 export interface RideParams {
@@ -132,7 +136,16 @@ export function deriveCrashPct(
  * @returns Generated ride with checkpoints
  */
 export function generateRide(seed: string, config: RideConfig): GeneratedRide {
-  const { checkpointCount, volatility, minBoostPct, maxBoostPct } = config;
+  const {
+    checkpointCount,
+    volatility,
+    minBoostPct,
+    maxBoostPct,
+    ticketStrength = 0,
+    durationSeconds,
+    crashPct,
+    minPeakDelaySeconds = 2,
+  } = config;
   const rng = new SeededRandom(seed);
 
   const checkpoints: RideCheckpoint[] = [];
@@ -174,6 +187,19 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
       baseBoostValue: roundToDecimals(value, 6),
     });
   }
+
+  enforceMinPeakDelay(checkpoints, {
+    minBoostPct,
+    maxBoostPct,
+    durationSeconds,
+    crashPct,
+    minPeakDelaySeconds,
+  });
+  applyStartDirectionBias(checkpoints, seed, {
+    minBoostPct,
+    maxBoostPct,
+    ticketStrength,
+  });
 
   return { checkpoints, seed };
 }
@@ -318,4 +344,105 @@ function betaSample(rng: SeededRandom, alpha: number, beta: number): number {
 
 function clampValue(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+interface StartBiasOptions {
+  minBoostPct: number;
+  maxBoostPct: number;
+  ticketStrength: number;
+}
+
+function applyStartDirectionBias(
+  checkpoints: RideCheckpoint[],
+  seed: string,
+  options: StartBiasOptions
+): void {
+  if (checkpoints.length < 2) {
+    return;
+  }
+
+  const strength = clampValue(options.ticketStrength, 0, 1);
+  if (strength <= 0) {
+    return;
+  }
+
+  const first = checkpoints[0];
+  const second = checkpoints[1];
+  if (second.baseBoostValue > first.baseBoostValue) {
+    return;
+  }
+
+  // Stronger tickets get a higher chance to flip an opening downswing into an upswing.
+  const rng = new SeededRandom(`start-bias:${seed}`);
+  const flipChance = 0.7 * strength;
+  if (rng.next() >= flipChance) {
+    return;
+  }
+
+  const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
+  const step = Math.max(range * 0.03, 0.000001);
+
+  let newFirst = first.baseBoostValue;
+  let newSecond = Math.min(options.maxBoostPct, first.baseBoostValue + step);
+
+  if (newSecond <= newFirst) {
+    newFirst = Math.max(options.minBoostPct, first.baseBoostValue - step);
+    newSecond = Math.min(options.maxBoostPct, newFirst + step);
+  }
+
+  checkpoints[0].baseBoostValue = roundToDecimals(newFirst, 6);
+  checkpoints[1].baseBoostValue = roundToDecimals(newSecond, 6);
+}
+
+interface PeakDelayOptions {
+  minBoostPct: number;
+  maxBoostPct: number;
+  durationSeconds?: number;
+  crashPct?: number;
+  minPeakDelaySeconds: number;
+}
+
+function enforceMinPeakDelay(
+  checkpoints: RideCheckpoint[],
+  options: PeakDelayOptions
+): void {
+  if (checkpoints.length < 2 || !options.durationSeconds || options.durationSeconds <= 0) {
+    return;
+  }
+
+  if (options.minPeakDelaySeconds <= 0) {
+    return;
+  }
+
+  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 0.99);
+  const earliestPeakPct = options.minPeakDelaySeconds / options.durationSeconds;
+
+  if (earliestPeakPct <= 0 || earliestPeakPct >= effectiveCrashPct) {
+    return;
+  }
+
+  const peakIdx = checkpoints.findIndex(
+    (cp) => cp.timeOffsetPct >= earliestPeakPct && cp.timeOffsetPct < effectiveCrashPct
+  );
+  if (peakIdx < 0) {
+    return;
+  }
+
+  const epsilon = Math.max((options.maxBoostPct - options.minBoostPct) * 0.005, 0.000001);
+  const forcedPeak = roundToDecimals(options.maxBoostPct, 6);
+
+  for (let i = 0; i < checkpoints.length; i++) {
+    const cp = checkpoints[i];
+    if (cp.timeOffsetPct < earliestPeakPct) {
+      const capped = Math.min(cp.baseBoostValue, options.maxBoostPct - epsilon);
+      cp.baseBoostValue = roundToDecimals(
+        Math.max(options.minBoostPct, capped),
+        6
+      );
+    }
+  }
+
+  if (peakIdx < checkpoints.length - 1) {
+    checkpoints[peakIdx].baseBoostValue = forcedPeak;
+  }
 }
