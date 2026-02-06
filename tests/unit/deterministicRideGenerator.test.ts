@@ -106,7 +106,7 @@ describe('deterministicRideGenerator', () => {
       expect(decreases).toBeGreaterThan(0);
     });
 
-    it('should produce between 1 and 4 humps before crash', () => {
+    it('should produce between 2 and 4 humps before crash', () => {
       const crashPct = 0.8;
       for (let i = 0; i < 300; i++) {
         const ride = generateRide(`hump-count-${i}`, {
@@ -128,7 +128,7 @@ describe('deterministicRideGenerator', () => {
           }
         }
 
-        expect(humpCount).toBeGreaterThanOrEqual(1);
+        expect(humpCount).toBeGreaterThanOrEqual(2);
         expect(humpCount).toBeLessThanOrEqual(4);
       }
     });

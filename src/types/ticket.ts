@@ -22,6 +22,16 @@ export interface QuoteRequest {
   bet_id: string;
 }
 
+export interface BoostModelReport {
+  selection_weight: number;
+  odds_weight: number;
+  max_eligibility_exponent: number;
+  effective_min_floor_rate: number;
+  selection_ratio: number | null;
+  odds_ratio: number | null;
+  eligibility_factor: number;
+}
+
 export interface QuoteResponse {
   eligible: boolean;
   reason_code: EligibilityReasonCode;
@@ -29,8 +39,11 @@ export interface QuoteResponse {
   total_selection_count: number;
   combined_odds: number;
   current_boost_pct: number | null;
+  effective_min_boost_pct: number | null;
+  effective_max_boost_pct: number | null;
   theoretical_max_boost_pct: number | null;
   ticket_strength: number | null;
+  boost_model?: BoostModelReport | null;
   ride_end_at_offset_seconds?: number | null;
   ride_crash_at_offset_seconds?: number | null;
   ride_path?: RidePathPoint[];

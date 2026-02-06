@@ -164,7 +164,9 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
     const initialClimbPct = getInitialClimbPct(durationSeconds, preCrashEndPct, 2);
     const minPeakDelayPct = getInitialClimbPct(durationSeconds, preCrashEndPct, minPeakDelaySeconds);
     const peakCapByPoints = Math.max(1, Math.floor((preCrashLastIndex + 1 - 1) / 2));
-    const peakCount = randomInt(rng, 1, Math.min(4, peakCapByPoints));
+    const maxPeakCount = Math.min(4, peakCapByPoints);
+    const minPeakCount = maxPeakCount >= 2 ? 2 : 1;
+    const peakCount = randomInt(rng, minPeakCount, maxPeakCount);
     const turningPointTimes = buildTurningPointTimes(
       rng,
       peakCount,
@@ -306,8 +308,9 @@ function buildTurningPointTimes(
   }
 
   const baseSegment = preCrashEndPct / (nodeCount - 1);
-  const minGap = Math.max(baseSegment * 0.35, preCrashEndPct * 0.01, 0.0005);
-  const jitterSpan = baseSegment * 0.45;
+  // Keep turning points reasonably separated to avoid repeated "horn" micro-peaks.
+  const minGap = Math.max(baseSegment * 0.5, preCrashEndPct * 0.015, 0.001);
+  const jitterSpan = baseSegment * 0.28;
 
   for (let i = 1; i < lastNodeIndex; i++) {
     const base = baseSegment * i;
@@ -380,22 +383,24 @@ function buildTurningPointValues(
     peakNodeIndexes.push(i);
   }
 
-  let highestPeakNode = peakNodeIndexes[0];
-  const eligibleHighest = peakNodeIndexes.filter((index) => turningPointTimes[index] >= minPeakDelayPct);
-  if (eligibleHighest.length > 0) {
-    highestPeakNode = eligibleHighest[randomInt(rng, 0, eligibleHighest.length - 1)];
-  }
+  const highestPeakNode = pickHighestPeakNode(
+    rng,
+    peakNodeIndexes,
+    turningPointTimes,
+    minPeakDelayPct
+  );
 
   const peakLevels = new Map<number, number>();
-  const highestLevel = 0.86 + (rng.next() * 0.12);
+  // Pull max-peak away from the hard ceiling to reduce early cap hugging.
+  const highestLevel = 0.68 + (rng.next() * 0.24);
   for (const peakNodeIndex of peakNodeIndexes) {
     if (peakNodeIndex === highestPeakNode) {
       peakLevels.set(peakNodeIndex, highestLevel);
       continue;
     }
 
-    const peakLevel = 0.52 + (rng.next() * 0.28);
-    peakLevels.set(peakNodeIndex, Math.min(peakLevel, highestLevel - (0.03 + (rng.next() * 0.05))));
+    const peakLevel = 0.42 + (rng.next() * 0.34);
+    peakLevels.set(peakNodeIndex, Math.min(peakLevel, highestLevel - (0.05 + (rng.next() * 0.08))));
   }
 
   values[0] = startingFloorValue;
@@ -408,9 +413,10 @@ function buildTurningPointValues(
     }
 
     const isFinalValley = i === nodeCount - 1;
+    // Allow deeper and more varied valleys so downswings are visibly volatile.
     const valleyLevel = isFinalValley
-      ? 0.1 + (rng.next() * 0.16)
-      : 0.18 + (rng.next() * 0.18);
+      ? 0.02 + (rng.next() * 0.18)
+      : 0.04 + (rng.next() * 0.34);
     values[i] = Math.max(startingFloorValue, minBoostPct + (valleyLevel * range));
   }
 
@@ -442,6 +448,31 @@ function buildTurningPointValues(
   }
 
   return values.map((value) => roundToDecimals(clampValue(value, minBoostPct, maxBoostPct), 6));
+}
+
+function pickHighestPeakNode(
+  rng: SeededRandom,
+  peakNodeIndexes: number[],
+  turningPointTimes: number[],
+  minPeakDelayPct: number
+): number {
+  if (peakNodeIndexes.length === 0) {
+    return 0;
+  }
+
+  const eligibleHighest = peakNodeIndexes.filter((index) => turningPointTimes[index] >= minPeakDelayPct);
+  let candidates = eligibleHighest.length > 0 ? eligibleHighest : peakNodeIndexes;
+
+  // Bias away from the first peak so "stop immediately" isn't consistently dominant.
+  if (candidates.length > 1) {
+    const firstPeakIndex = peakNodeIndexes[0];
+    const nonFirst = candidates.filter((index) => index !== firstPeakIndex);
+    if (nonFirst.length > 0 && rng.next() < 0.75) {
+      candidates = nonFirst;
+    }
+  }
+
+  return candidates[randomInt(rng, 0, candidates.length - 1)];
 }
 
 function fillCheckpointValuesFromTurningPoints(
@@ -1398,7 +1429,7 @@ function enforceNoFlatSegmentsBeforeCrash(
 
   const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
   const threshold = Math.max(range * 0.0005, 0.000001);
-  const step = Math.max(range * 0.002, 0.00001);
+  const step = Math.max(range * 0.006, 0.00001);
   const minPreCrashValue = clampValue(
     options.minPreCrashValue ?? options.minBoostPct,
     options.minBoostPct,

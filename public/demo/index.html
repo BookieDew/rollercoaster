@@ -168,6 +168,12 @@
         font-size: 12px;
       }
 
+      .model-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+
       .chart {
         width: 100%;
         border-radius: 14px;
@@ -292,8 +298,41 @@
 
       <div class="right">
         <section>
-          <h2>Latest Response</h2>
-          <pre id="responseBox">{}</pre>
+          <h2>Boost Model</h2>
+          <div class="model-grid">
+            <div>
+              <label>Selection / Odds split</label>
+              <div class="status" id="modelSplit">n/a</div>
+            </div>
+            <div>
+              <label>Floor rate</label>
+              <div class="status" id="modelFloorRate">n/a</div>
+            </div>
+            <div>
+              <label>Exponent</label>
+              <div class="status" id="modelExponent">n/a</div>
+            </div>
+            <div>
+              <label>Eligibility factor</label>
+              <div class="status" id="modelEligibilityFactor">n/a</div>
+            </div>
+            <div>
+              <label>Selection ratio</label>
+              <div class="status" id="modelSelectionRatio">n/a</div>
+            </div>
+            <div>
+              <label>Odds ratio</label>
+              <div class="status" id="modelOddsRatio">n/a</div>
+            </div>
+            <div>
+              <label>Effective min boost</label>
+              <div class="status" id="modelEffectiveMin">n/a</div>
+            </div>
+            <div>
+              <label>Effective max boost</label>
+              <div class="status" id="modelEffectiveMax">n/a</div>
+            </div>
+          </div>
         </section>
         <section>
           <h2>Ride Path (effective)</h2>
@@ -304,6 +343,10 @@
               <circle id="stopMarker" r="5" fill="#15803d" stroke="#ffffff" stroke-width="2" style="display: none;"></circle>
             </svg>
           </div>
+        </section>
+        <section>
+          <h2>Latest Response</h2>
+          <pre id="responseBox">{}</pre>
         </section>
       </div>
     </main>
@@ -336,6 +379,7 @@
 
       function setResponse(payload) {
         responseBox.textContent = JSON.stringify(payload, null, 2);
+        updateModelPanel(payload);
         const chartData = extractChartData(payload);
         if (chartData.ridePath) {
           renderRidePath(chartData.ridePath, {
@@ -346,6 +390,35 @@
           hideMarker(crashMarker);
           hideMarker(stopMarker);
         }
+      }
+
+      function updateModelPanel(payload) {
+        const details = payload && payload.details ? payload.details : payload;
+        const model = details && details.boost_model ? details.boost_model : null;
+        setMetric('modelSplit', model
+          ? `${formatPercent(model.selection_weight, 0)} / ${formatPercent(model.odds_weight, 0)}`
+          : null);
+        setMetric('modelFloorRate', model
+          ? formatPercent(model.effective_min_floor_rate, 0)
+          : null);
+        setMetric('modelExponent', model
+          ? Number(model.max_eligibility_exponent).toFixed(2)
+          : null);
+        setMetric('modelEligibilityFactor', model
+          ? Number(model.eligibility_factor).toFixed(4)
+          : null);
+        setMetric('modelSelectionRatio', model && model.selection_ratio !== null
+          ? Number(model.selection_ratio).toFixed(4)
+          : null);
+        setMetric('modelOddsRatio', model && model.odds_ratio !== null
+          ? Number(model.odds_ratio).toFixed(4)
+          : null);
+        setMetric('modelEffectiveMin', details && Number.isFinite(Number(details.effective_min_boost_pct))
+          ? formatPercent(Number(details.effective_min_boost_pct), 2)
+          : null);
+        setMetric('modelEffectiveMax', details && Number.isFinite(Number(details.effective_max_boost_pct))
+          ? formatPercent(Number(details.effective_max_boost_pct), 2)
+          : null);
       }
 
       function apiFetch(path, method, body) {
@@ -523,6 +596,14 @@
 
       function setText(id, value) {
         document.getElementById(id).textContent = value || 'n/a';
+      }
+
+      function setMetric(id, value) {
+        document.getElementById(id).textContent = value === null || value === undefined ? 'n/a' : value;
+      }
+
+      function formatPercent(value, digits = 2) {
+        return `${(Number(value) * 100).toFixed(digits)}%`;
       }
 
       function updateElapsed() {

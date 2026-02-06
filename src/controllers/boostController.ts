@@ -103,7 +103,18 @@ export async function getLock(
       qualifying_odds: result.data.qualifyingOdds,
       ticket_strength: result.data.ticketStrength,
       locked_at: result.data.lockedAt,
+      effective_min_boost_pct: result.data.snapshot.effectiveMinBoostPct,
+      effective_max_boost_pct: result.data.snapshot.maxEligibleBoostPct,
       theoretical_max_boost_pct: result.data.snapshot.maxPossibleBoostPct,
+      boost_model: {
+        selection_weight: result.data.snapshot.boostModel.selectionWeight,
+        odds_weight: result.data.snapshot.boostModel.oddsWeight,
+        max_eligibility_exponent: result.data.snapshot.boostModel.maxEligibilityExponent,
+        effective_min_floor_rate: result.data.snapshot.boostModel.effectiveMinFloorRate,
+        selection_ratio: result.data.snapshot.boostModel.selectionRatio,
+        odds_ratio: result.data.snapshot.boostModel.oddsRatio,
+        eligibility_factor: result.data.snapshot.boostModel.eligibilityFactor,
+      },
       ride_stop_at_offset_seconds: roundToDecimals(
         result.data.snapshot.rideDurationSeconds * result.data.snapshot.elapsedPct,
         3

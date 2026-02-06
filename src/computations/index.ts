@@ -32,10 +32,14 @@ export {
 
 export {
   calculateFinalBoost,
+  calculateFinalBoostDetails,
+  computeBoostModelDetails,
   computeMaxEligibleBoostPct,
+  getBoostModelConstants,
   calculateBonusAmount,
   clampValue,
   formatBoostPercentage,
+  type BoostModelDetails,
   type FinalBoostConfig,
   type FinalBoostInput,
 } from './finalBoostCalculator';

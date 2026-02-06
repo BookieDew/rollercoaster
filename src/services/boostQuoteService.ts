@@ -10,11 +10,12 @@ import {
   interpolateRideValue,
   calculateElapsedPct,
   hasRideEnded as checkRideEnded,
-  calculateFinalBoost,
+  calculateFinalBoostDetails,
+  computeBoostModelDetails,
   deriveCrashPct,
   buildEffectiveRidePath,
 } from '../computations';
-import type { Selection, QuoteResponse } from '../types/ticket';
+import type { BoostModelReport, Selection, QuoteResponse } from '../types/ticket';
 import type { RidePathPoint } from '../types/ride';
 import { ReasonCode, type EligibilityReasonCode } from '../types/reasonCodes';
 import { config } from '../config';
@@ -127,6 +128,17 @@ export async function getQuote(
   );
 
   const combinedOdds = calculateCombinedOdds(qualifying);
+  const boostModelDetails = computeBoostModelDetails(
+    qualifying.length,
+    combinedOdds,
+    {
+      minBoostPct: profile.minBoostPct,
+      maxBoostPct: profile.maxBoostPct,
+      maxBoostMinSelections: profile.maxBoostMinSelections,
+      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+    }
+  );
+  const boostModel = toBoostModelReport(boostModelDetails);
   const tentativeTicketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
     minSelections: profile.minSelections,
   });
@@ -140,9 +152,12 @@ export async function getQuote(
         storedSelections.length,
         qualifying.length,
         combinedOdds,
+        boostModelDetails.effectiveMinBoost,
+        boostModelDetails.effectiveMaxBoost,
         null,
         null,
-        tentativeTicketStrength
+        tentativeTicketStrength,
+        boostModel
       ),
     };
   }
@@ -156,9 +171,12 @@ export async function getQuote(
         storedSelections.length,
         qualifying.length,
         combinedOdds,
+        boostModelDetails.effectiveMinBoost,
+        boostModelDetails.effectiveMaxBoost,
         null,
         null,
-        tentativeTicketStrength
+        tentativeTicketStrength,
+        boostModel
       ),
     };
   }
@@ -204,7 +222,7 @@ export async function getQuote(
   );
 
   // Calculate final boost
-  const currentBoostPct = calculateFinalBoost({
+  const currentBoostDetails = calculateFinalBoostDetails({
     rideValue,
     ticketStrength,
     qualifyingSelections: qualifying.length,
@@ -217,7 +235,7 @@ export async function getQuote(
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
     },
   });
-  const theoreticalMaxBoostPct = calculateFinalBoost({
+  const theoreticalMaxBoostDetails = calculateFinalBoostDetails({
     rideValue: maxRideValue,
     ticketStrength,
     qualifyingSelections: qualifying.length,
@@ -230,6 +248,10 @@ export async function getQuote(
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
     },
   });
+  const currentBoostPct = currentBoostDetails.finalBoostPct;
+  const theoreticalMaxBoostPct = theoreticalMaxBoostDetails.finalBoostPct;
+  const effectiveMinBoostPct = currentBoostDetails.minBoost;
+  const effectiveMaxBoostPct = currentBoostDetails.effectiveMaxBoost;
 
   // Check if ride has crashed or ended
   if (elapsedPct >= crashPct) {
@@ -240,8 +262,11 @@ export async function getQuote(
         storedSelections.length,
         qualifying.length,
         combinedOdds,
+        effectiveMinBoostPct,
+        effectiveMaxBoostPct,
         ticketStrength,
         theoreticalMaxBoostPct,
+        boostModel,
         ridePath,
         endOffsetSeconds,
         crashOffsetSeconds
@@ -256,8 +281,11 @@ export async function getQuote(
         storedSelections.length,
         qualifying.length,
         combinedOdds,
+        effectiveMinBoostPct,
+        effectiveMaxBoostPct,
         ticketStrength,
         theoreticalMaxBoostPct,
+        boostModel,
         ridePath,
         endOffsetSeconds,
         crashOffsetSeconds
@@ -274,8 +302,11 @@ export async function getQuote(
       total_selection_count: storedSelections.length,
       combined_odds: combinedOdds,
       current_boost_pct: currentBoostPct,
+      effective_min_boost_pct: effectiveMinBoostPct,
+      effective_max_boost_pct: effectiveMaxBoostPct,
       theoretical_max_boost_pct: theoreticalMaxBoostPct,
       ticket_strength: ticketStrength,
+      boost_model: boostModel,
       ride_end_at_offset_seconds: null,
       ride_crash_at_offset_seconds: null,
     },
@@ -287,9 +318,12 @@ function buildIneligibleResponse(
   totalCount: number,
   qualifyingCount: number,
   combinedOdds: number,
+  effectiveMinBoostPct: number | null = null,
+  effectiveMaxBoostPct: number | null = null,
   endOffsetSeconds: number | null = null,
   crashOffsetSeconds: number | null = null,
-  ticketStrength: number | null = null
+  ticketStrength: number | null = null,
+  boostModel: BoostModelReport | null = null
 ): QuoteResponse {
   return {
     eligible: false,
@@ -298,8 +332,11 @@ function buildIneligibleResponse(
     total_selection_count: totalCount,
     combined_odds: combinedOdds,
     current_boost_pct: null,
+    effective_min_boost_pct: effectiveMinBoostPct,
+    effective_max_boost_pct: effectiveMaxBoostPct,
     theoretical_max_boost_pct: null,
     ticket_strength: ticketStrength,
+    boost_model: boostModel,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
   };
@@ -310,8 +347,11 @@ function buildRideEndedResponse(
   totalCount: number,
   qualifyingCount: number,
   combinedOdds: number,
+  effectiveMinBoostPct: number,
+  effectiveMaxBoostPct: number,
   ticketStrength: number,
   theoreticalMaxBoostPct: number,
+  boostModel: BoostModelReport,
   ridePath: RidePathPoint[],
   endOffsetSeconds: number,
   crashOffsetSeconds: number
@@ -323,11 +363,34 @@ function buildRideEndedResponse(
     total_selection_count: totalCount,
     combined_odds: combinedOdds,
     current_boost_pct: 0,
+    effective_min_boost_pct: effectiveMinBoostPct,
+    effective_max_boost_pct: effectiveMaxBoostPct,
     theoretical_max_boost_pct: theoreticalMaxBoostPct,
     ticket_strength: ticketStrength,
+    boost_model: boostModel,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
     ride_path: ridePath,
+  };
+}
+
+function toBoostModelReport(details: {
+  selectionWeight: number;
+  oddsWeight: number;
+  maxEligibilityExponent: number;
+  effectiveMinFloorRate: number;
+  selectionRatio: number | null;
+  oddsRatio: number | null;
+  eligibilityFactor: number;
+}): BoostModelReport {
+  return {
+    selection_weight: details.selectionWeight,
+    odds_weight: details.oddsWeight,
+    max_eligibility_exponent: details.maxEligibilityExponent,
+    effective_min_floor_rate: details.effectiveMinFloorRate,
+    selection_ratio: details.selectionRatio,
+    odds_ratio: details.oddsRatio,
+    eligibility_factor: details.eligibilityFactor,
   };
 }
 

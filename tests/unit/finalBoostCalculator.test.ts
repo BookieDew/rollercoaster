@@ -1,7 +1,10 @@
 import {
   calculateFinalBoost,
   calculateBonusAmount,
+  calculateFinalBoostDetails,
   clampValue,
+  computeBoostModelDetails,
+  computeMaxEligibleBoostPct,
   formatBoostPercentage,
 } from '../../src/computations/finalBoostCalculator';
 
@@ -150,6 +153,114 @@ describe('finalBoostCalculator', () => {
       const bonus = calculateBonusAmount(100, 0.123456789);
 
       expect(bonus).toBe(12.3457);
+    });
+  });
+
+  describe('computeMaxEligibleBoostPct', () => {
+    it('returns configured max when no max-boost thresholds are set', () => {
+      const effectiveMax = computeMaxEligibleBoostPct(8, 25, {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: null,
+        maxBoostMinCombinedOdds: null,
+      });
+
+      expect(effectiveMax).toBe(1.0);
+    });
+
+    it('uses 75/25 weighting when both thresholds are configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: 100,
+      };
+
+      const base = computeMaxEligibleBoostPct(8, 20, cfg);
+      const improvedSelections = computeMaxEligibleBoostPct(10, 20, cfg); // +25% selection ratio
+      const improvedOdds = computeMaxEligibleBoostPct(8, 25, cfg); // +25% odds ratio
+
+      expect(improvedSelections).toBeGreaterThan(base);
+      expect(improvedOdds).toBeGreaterThan(base);
+      expect(improvedSelections - base).toBeGreaterThan(improvedOdds - base);
+    });
+
+    it('fully uses selections when only selection threshold is configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: null,
+      };
+
+      const lowSelections = computeMaxEligibleBoostPct(8, 1_000, cfg);
+      const highSelections = computeMaxEligibleBoostPct(16, 1_000, cfg);
+
+      expect(highSelections).toBeGreaterThan(lowSelections);
+    });
+
+    it('fully uses odds when only odds threshold is configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: null,
+        maxBoostMinCombinedOdds: 100,
+      };
+
+      const lowOdds = computeMaxEligibleBoostPct(99, 20, cfg);
+      const highOdds = computeMaxEligibleBoostPct(99, 80, cfg);
+
+      expect(highOdds).toBeGreaterThan(lowOdds);
+    });
+  });
+
+  describe('effective minimum boost floor', () => {
+    it('lifts effective minimum for stronger tickets when thresholds are configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: 100,
+      };
+      const weakModel = computeBoostModelDetails(6, 15, cfg);
+      const strongModel = computeBoostModelDetails(14, 60, cfg);
+
+      expect(weakModel.effectiveMinBoost).toBeGreaterThanOrEqual(cfg.minBoostPct);
+      expect(strongModel.effectiveMinBoost).toBeGreaterThan(weakModel.effectiveMinBoost);
+      expect(strongModel.effectiveMinBoost).toBeLessThanOrEqual(strongModel.effectiveMaxBoost);
+    });
+
+    it('keeps effective minimum at configured minimum when no thresholds are configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: null,
+        maxBoostMinCombinedOdds: null,
+      };
+
+      const model = computeBoostModelDetails(99, 10_000, cfg);
+      expect(model.effectiveMinBoost).toBe(cfg.minBoostPct);
+      expect(model.effectiveMaxBoost).toBe(cfg.maxBoostPct);
+    });
+
+    it('uses effective minimum in final boost clamping', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: 100,
+      };
+      const details = calculateFinalBoostDetails({
+        rideValue: 0,
+        ticketStrength: 0,
+        qualifyingSelections: 16,
+        combinedOdds: 80,
+        hasRideEnded: false,
+        config: cfg,
+      });
+
+      expect(details.finalBoostPct).toBe(details.minBoost);
+      expect(details.minBoost).toBeGreaterThan(cfg.minBoostPct);
     });
   });
 

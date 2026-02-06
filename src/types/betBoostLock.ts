@@ -1,6 +1,16 @@
 import type { Selection } from './ticket';
 import type { RidePathPoint } from './ride';
 
+export interface BoostModelSnapshot {
+  selectionWeight: number;
+  oddsWeight: number;
+  maxEligibilityExponent: number;
+  effectiveMinFloorRate: number;
+  selectionRatio: number | null;
+  oddsRatio: number | null;
+  eligibilityFactor: number;
+}
+
 export interface BetBoostLock {
   id: string;
   betId: string;
@@ -37,8 +47,10 @@ export interface LockSnapshot {
   rideValue: number;
   maxRideValue: number;
   elapsedPct: number;
+  effectiveMinBoostPct: number;
   maxEligibleBoostPct: number;
   maxPossibleBoostPct: number;
+  boostModel: BoostModelSnapshot;
   ridePath: RidePathPoint[];
 }
 
@@ -67,7 +79,18 @@ export interface LockResponse {
   qualifying_odds: number;
   ticket_strength: number;
   locked_at: string;
+  effective_min_boost_pct: number;
+  effective_max_boost_pct: number;
   theoretical_max_boost_pct: number;
+  boost_model: {
+    selection_weight: number;
+    odds_weight: number;
+    max_eligibility_exponent: number;
+    effective_min_floor_rate: number;
+    selection_ratio: number | null;
+    odds_ratio: number | null;
+    eligibility_factor: number;
+  };
   ride_stop_at_offset_seconds: number;
   ride_end_at_offset_seconds: number;
   ride_crash_at_offset_seconds: number;

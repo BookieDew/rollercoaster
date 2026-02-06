@@ -12,9 +12,8 @@ import {
   interpolateRideValue,
   calculateElapsedPct,
   hasRideEnded as checkRideEnded,
-  calculateFinalBoost,
+  calculateFinalBoostDetails,
   deriveRideParams,
-  computeMaxEligibleBoostPct,
   buildEffectiveRidePath,
 } from '../computations';
 import type { BetBoostLock, LockResponse } from '../types/betBoostLock';
@@ -211,8 +210,8 @@ export async function lockBoost(
     combinedOdds
   );
 
-  // Calculate final boost
-  const lockedBoostPct = calculateFinalBoost({
+  // Calculate final boost and theoretical bounds.
+  const lockedBoostDetails = calculateFinalBoostDetails({
     rideValue,
     ticketStrength,
     qualifyingSelections: qualifying.length,
@@ -226,7 +225,7 @@ export async function lockBoost(
     },
   });
 
-  const maxPossibleBoostPct = calculateFinalBoost({
+  const maxBoostDetails = calculateFinalBoostDetails({
     rideValue: maxRideValue,
     ticketStrength,
     qualifyingSelections: qualifying.length,
@@ -239,16 +238,12 @@ export async function lockBoost(
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
     },
   });
-  const maxEligibleBoostPct = computeMaxEligibleBoostPct(
-    qualifying.length,
-    combinedOdds,
-    {
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-    }
-  );
+
+  const lockedBoostPct = lockedBoostDetails.finalBoostPct;
+  const maxPossibleBoostPct = maxBoostDetails.finalBoostPct;
+  const maxEligibleBoostPct = lockedBoostDetails.effectiveMaxBoost;
+  const effectiveMinBoostPct = lockedBoostDetails.minBoost;
+  const boostModel = lockedBoostDetails.boostModel;
 
   if (elapsedPct >= crashPct) {
     return {
@@ -263,8 +258,11 @@ export async function lockBoost(
           total_selection_count: storedSelections.length,
           combined_odds: combinedOdds,
           current_boost_pct: 0,
+          effective_min_boost_pct: effectiveMinBoostPct,
+          effective_max_boost_pct: maxEligibleBoostPct,
           theoretical_max_boost_pct: maxPossibleBoostPct,
           ticket_strength: ticketStrength,
+          boost_model: toBoostModelResponse(boostModel),
           ride_path: ridePath,
         },
       },
@@ -283,8 +281,11 @@ export async function lockBoost(
           total_selection_count: storedSelections.length,
           combined_odds: combinedOdds,
           current_boost_pct: 0,
+          effective_min_boost_pct: effectiveMinBoostPct,
+          effective_max_boost_pct: maxEligibleBoostPct,
           theoretical_max_boost_pct: maxPossibleBoostPct,
           ticket_strength: ticketStrength,
+          boost_model: toBoostModelResponse(boostModel),
           ride_path: ridePath,
         },
       },
@@ -322,8 +323,18 @@ export async function lockBoost(
       rideValue,
       maxRideValue,
       elapsedPct,
+      effectiveMinBoostPct,
       maxEligibleBoostPct,
       maxPossibleBoostPct,
+      boostModel: {
+        selectionWeight: boostModel.selectionWeight,
+        oddsWeight: boostModel.oddsWeight,
+        maxEligibilityExponent: boostModel.maxEligibilityExponent,
+        effectiveMinFloorRate: boostModel.effectiveMinFloorRate,
+        selectionRatio: boostModel.selectionRatio,
+        oddsRatio: boostModel.oddsRatio,
+        eligibilityFactor: boostModel.eligibilityFactor,
+      },
       ridePath,
     },
   });
@@ -388,7 +399,10 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
     qualifying_odds: lock.qualifyingOdds,
     ticket_strength: lock.ticketStrength,
     locked_at: lock.lockedAt,
+    effective_min_boost_pct: lock.snapshot.effectiveMinBoostPct,
+    effective_max_boost_pct: lock.snapshot.maxEligibleBoostPct,
     theoretical_max_boost_pct: lock.snapshot.maxPossibleBoostPct,
+    boost_model: toBoostModelResponse(lock.snapshot.boostModel),
     ride_stop_at_offset_seconds: roundToDecimals(
       lock.snapshot.rideDurationSeconds * lock.snapshot.elapsedPct,
       3
@@ -399,6 +413,26 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
       3
     ),
     ride_path: lock.snapshot.ridePath,
+  };
+}
+
+function toBoostModelResponse(model: {
+  selectionWeight: number;
+  oddsWeight: number;
+  maxEligibilityExponent: number;
+  effectiveMinFloorRate: number;
+  selectionRatio: number | null;
+  oddsRatio: number | null;
+  eligibilityFactor: number;
+}): LockResponse['boost_model'] {
+  return {
+    selection_weight: model.selectionWeight,
+    odds_weight: model.oddsWeight,
+    max_eligibility_exponent: model.maxEligibilityExponent,
+    effective_min_floor_rate: model.effectiveMinFloorRate,
+    selection_ratio: model.selectionRatio,
+    odds_ratio: model.oddsRatio,
+    eligibility_factor: model.eligibilityFactor,
   };
 }
 
