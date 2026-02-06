@@ -127,6 +127,9 @@ export async function getQuote(
   );
 
   const combinedOdds = calculateCombinedOdds(qualifying);
+  const tentativeTicketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
+    minSelections: profile.minSelections,
+  });
 
   // Check minimum selection count
   if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
@@ -136,7 +139,10 @@ export async function getQuote(
         ReasonCode.MIN_SELECTIONS_NOT_MET,
         storedSelections.length,
         qualifying.length,
-        combinedOdds
+        combinedOdds,
+        null,
+        null,
+        tentativeTicketStrength
       ),
     };
   }
@@ -149,15 +155,16 @@ export async function getQuote(
         ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
         storedSelections.length,
         qualifying.length,
-        combinedOdds
+        combinedOdds,
+        null,
+        null,
+        tentativeTicketStrength
       ),
     };
   }
 
   // Compute ticket strength
-  const ticketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
-    minSelections: profile.minSelections,
-  });
+  const ticketStrength = tentativeTicketStrength;
 
   const elapsedPct = calculateElapsedPct(reward.startTime, reward.endTime);
   const rideDurationSeconds =
@@ -281,7 +288,8 @@ function buildIneligibleResponse(
   qualifyingCount: number,
   combinedOdds: number,
   endOffsetSeconds: number | null = null,
-  crashOffsetSeconds: number | null = null
+  crashOffsetSeconds: number | null = null,
+  ticketStrength: number | null = null
 ): QuoteResponse {
   return {
     eligible: false,
@@ -291,7 +299,7 @@ function buildIneligibleResponse(
     combined_odds: combinedOdds,
     current_boost_pct: null,
     theoretical_max_boost_pct: null,
-    ticket_strength: null,
+    ticket_strength: ticketStrength,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
   };

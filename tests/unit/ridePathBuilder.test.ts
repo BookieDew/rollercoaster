@@ -69,10 +69,12 @@ describe('ridePathBuilder', () => {
       50
     );
 
-    const nearCap = path.filter((p) => p.timePct < crashPct && p.baseBoostValue >= 0.49);
-    expect(nearCap.length).toBeGreaterThan(2);
+    const preCrash = path.filter((p) => p.timePct < crashPct);
+    const maxPreCrash = Math.max(...preCrash.map((p) => p.baseBoostValue));
+    const topBand = preCrash.filter((p) => p.baseBoostValue >= (maxPreCrash - 0.03));
+    expect(topBand.length).toBeGreaterThan(2);
 
-    const uniqueNearCap = new Set(nearCap.map((p) => p.baseBoostValue));
-    expect(uniqueNearCap.size).toBeGreaterThan(2);
+    const uniqueTopBand = new Set(topBand.map((p) => p.baseBoostValue));
+    expect(uniqueTopBand.size).toBeGreaterThan(2);
   });
 });

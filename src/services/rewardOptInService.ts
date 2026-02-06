@@ -105,18 +105,37 @@ export async function precheckEligibility(
   );
 
   const combinedOdds = calculateCombinedOdds(qualifying);
+  const tentativeTicketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
+    minSelections: profile.minSelections,
+  });
 
   if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
-    return { success: true, data: buildEligibilityResponse(ReasonCode.MIN_SELECTIONS_NOT_MET, selections.length, qualifying.length, combinedOdds, null) };
+    return {
+      success: true,
+      data: buildEligibilityResponse(
+        ReasonCode.MIN_SELECTIONS_NOT_MET,
+        selections.length,
+        qualifying.length,
+        combinedOdds,
+        tentativeTicketStrength
+      ),
+    };
   }
 
   if (!meetsCombinedOddsThreshold(combinedOdds, profile.minCombinedOdds)) {
-    return { success: true, data: buildEligibilityResponse(ReasonCode.MIN_COMBINED_ODDS_NOT_MET, selections.length, qualifying.length, combinedOdds, null) };
+    return {
+      success: true,
+      data: buildEligibilityResponse(
+        ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
+        selections.length,
+        qualifying.length,
+        combinedOdds,
+        tentativeTicketStrength
+      ),
+    };
   }
 
-  const ticketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
-    minSelections: profile.minSelections,
-  });
+  const ticketStrength = tentativeTicketStrength;
 
   return {
     success: true,

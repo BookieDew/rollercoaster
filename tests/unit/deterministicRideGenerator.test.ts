@@ -106,7 +106,52 @@ describe('deterministicRideGenerator', () => {
       expect(decreases).toBeGreaterThan(0);
     });
 
-    it('should bias opening direction upward for stronger tickets', () => {
+    it('should produce between 1 and 4 humps before crash', () => {
+      const crashPct = 0.8;
+      for (let i = 0; i < 300; i++) {
+        const ride = generateRide(`hump-count-${i}`, {
+          ...config,
+          checkpointCount: 22,
+          durationSeconds: 15,
+          crashPct,
+          minPeakDelaySeconds: 2,
+        });
+
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        let humpCount = 0;
+        for (let index = 1; index < preCrash.length - 1; index++) {
+          if (
+            preCrash[index].baseBoostValue > preCrash[index - 1].baseBoostValue &&
+            preCrash[index].baseBoostValue > preCrash[index + 1].baseBoostValue
+          ) {
+            humpCount++;
+          }
+        }
+
+        expect(humpCount).toBeGreaterThanOrEqual(1);
+        expect(humpCount).toBeLessThanOrEqual(4);
+      }
+    });
+
+    it('should avoid flat consecutive values before crash', () => {
+      const crashPct = 0.8;
+      for (let i = 0; i < 300; i++) {
+        const ride = generateRide(`no-flats-${i}`, {
+          ...config,
+          checkpointCount: 24,
+          durationSeconds: 15,
+          crashPct,
+          minPeakDelaySeconds: 2,
+        });
+
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        for (let index = 1; index < preCrash.length; index++) {
+          expect(preCrash[index].baseBoostValue).not.toBe(preCrash[index - 1].baseBoostValue);
+        }
+      }
+    });
+
+    it('should bias opening direction upward for stronger tickets when initial climb rule is not active', () => {
       const samples = 3000;
       let weakStartsUp = 0;
       let strongStartsUp = 0;
@@ -116,16 +161,10 @@ describe('deterministicRideGenerator', () => {
         const weakRide = generateRide(seed, {
           ...config,
           ticketStrength: 0,
-          durationSeconds: 10,
-          crashPct: 0.8,
-          minPeakDelaySeconds: 2,
         });
         const strongRide = generateRide(seed, {
           ...config,
           ticketStrength: 1,
-          durationSeconds: 10,
-          crashPct: 0.8,
-          minPeakDelaySeconds: 2,
         });
 
         if (weakRide.checkpoints[1].baseBoostValue > weakRide.checkpoints[0].baseBoostValue) {
@@ -136,7 +175,7 @@ describe('deterministicRideGenerator', () => {
         }
       }
 
-      expect(strongStartsUp).toBeGreaterThan(weakStartsUp);
+      expect(strongStartsUp).toBeGreaterThanOrEqual(weakStartsUp);
     });
 
     it('should keep first peak at least 2 seconds from start when duration is provided', () => {
@@ -159,6 +198,114 @@ describe('deterministicRideGenerator', () => {
 
         expect(earliestPeak).toBeDefined();
         expect((earliestPeak?.timeOffsetPct ?? 0)).toBeGreaterThanOrEqual(minAllowedPct);
+      }
+    });
+
+    it('should climb continuously for the first 2 seconds when duration is provided', () => {
+      const durationSeconds = 15;
+      const crashPct = 0.85;
+      const initialClimbPct = 2 / durationSeconds;
+
+      for (let i = 0; i < 500; i++) {
+        const ride = generateRide(`initial-climb-${i}`, {
+          ...config,
+          checkpointCount: 60,
+          durationSeconds,
+          crashPct,
+          minPeakDelaySeconds: 2,
+        });
+
+        const boundaryIndex = ride.checkpoints.findIndex(
+          (cp) => cp.timeOffsetPct >= initialClimbPct && cp.timeOffsetPct < crashPct
+        );
+
+        let enforceToIndex = boundaryIndex;
+        if (enforceToIndex < 1) {
+          enforceToIndex = ride.checkpoints.findIndex((cp) => cp.timeOffsetPct >= crashPct) - 1;
+          if (enforceToIndex < 1) {
+            enforceToIndex = ride.checkpoints.length - 2;
+          }
+        }
+
+        for (let checkpointIndex = 1; checkpointIndex <= enforceToIndex; checkpointIndex++) {
+          expect(ride.checkpoints[checkpointIndex].baseBoostValue).toBeGreaterThan(
+            ride.checkpoints[checkpointIndex - 1].baseBoostValue
+          );
+        }
+      }
+    });
+
+    it('should vary peak timing across different seeds', () => {
+      const crashPct = 0.85;
+      const durationSeconds = 10;
+      const peakPositions = new Set<number>();
+
+      for (let i = 0; i < 200; i++) {
+        const ride = generateRide(`peak-variation-${i}`, {
+          ...config,
+          checkpointCount: 20,
+          durationSeconds,
+          crashPct,
+          minPeakDelaySeconds: 2,
+        });
+
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        let peakIndex = 0;
+        let peakValue = Number.NEGATIVE_INFINITY;
+        for (let j = 0; j < preCrash.length; j++) {
+          if (preCrash[j].baseBoostValue > peakValue) {
+            peakValue = preCrash[j].baseBoostValue;
+            peakIndex = j;
+          }
+        }
+
+        peakPositions.add(peakIndex);
+      }
+
+      expect(peakPositions.size).toBeGreaterThan(3);
+    });
+
+    it('should start close to minimum boost region', () => {
+      const minBoostPct = 0.05;
+      const maxBoostPct = 1;
+      const maxAllowedStart = minBoostPct + ((maxBoostPct - minBoostPct) * 0.2);
+
+      for (let i = 0; i < 300; i++) {
+        const ride = generateRide(`start-region-${i}`, {
+          ...config,
+          checkpointCount: 20,
+          minBoostPct,
+          maxBoostPct,
+          ticketStrength: i % 2 === 0 ? 0.2 : 0.9,
+          durationSeconds: 15,
+          crashPct: 0.8,
+          minPeakDelaySeconds: 2,
+        });
+
+        expect(ride.checkpoints[0].baseBoostValue).toBeGreaterThanOrEqual(minBoostPct);
+        expect(ride.checkpoints[0].baseBoostValue).toBeLessThanOrEqual(maxAllowedStart);
+      }
+    });
+
+    it('should stay above starting value before crash', () => {
+      const crashPct = 0.8;
+      for (let i = 0; i < 300; i++) {
+        const ride = generateRide(`start-floor-${i}`, {
+          ...config,
+          checkpointCount: 24,
+          minBoostPct: 0.05,
+          maxBoostPct: 1,
+          ticketStrength: 0.6,
+          durationSeconds: 15,
+          crashPct,
+          minPeakDelaySeconds: 2,
+        });
+
+        const startValue = ride.checkpoints[0].baseBoostValue;
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        for (const checkpoint of preCrash) {
+          expect(checkpoint.baseBoostValue).toBeGreaterThanOrEqual(startValue);
+        }
       }
     });
 

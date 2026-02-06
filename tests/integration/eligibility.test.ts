@@ -137,6 +137,27 @@ describe('Eligibility Integration Tests', () => {
       expect(precheckRes.body.eligible).toBe(true);
       expect(precheckRes.body.reason_code).toBe(ReasonCode.ELIGIBLE);
     });
+
+    it('should return numeric ticket strength in precheck threshold failures', async () => {
+      const precheckRes = await request(app)
+        .post(`/api/rewards/${rewardId}/eligibility`)
+        .set('X-API-Key', API_KEY)
+        .send({
+          user_id: 'eligibility-user',
+          ticket: {
+            selections: [
+              { id: 's1', odds: 2.0 },
+              { id: 's2', odds: 2.2 },
+            ],
+          },
+        });
+
+      expect(precheckRes.status).toBe(200);
+      expect(precheckRes.body.eligible).toBe(false);
+      expect(precheckRes.body.reason_code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
+      expect(precheckRes.body.ticket_strength).toBe(0);
+    });
+
     it('should return REWARD_NOT_FOUND for invalid reward ID', async () => {
       const quoteRes = await request(app)
         .post('/api/boost/quote')
