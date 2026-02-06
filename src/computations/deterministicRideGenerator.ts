@@ -188,17 +188,23 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
     });
   }
 
+  applyStartDirectionBias(checkpoints, seed, {
+    minBoostPct,
+    maxBoostPct,
+    ticketStrength,
+  });
+  enforceRideDirectionRules(checkpoints, {
+    minBoostPct,
+    maxBoostPct,
+    crashPct,
+    minRunLength: 3,
+  });
   enforceMinPeakDelay(checkpoints, {
     minBoostPct,
     maxBoostPct,
     durationSeconds,
     crashPct,
     minPeakDelaySeconds,
-  });
-  applyStartDirectionBias(checkpoints, seed, {
-    minBoostPct,
-    maxBoostPct,
-    ticketStrength,
   });
 
   return { checkpoints, seed };
@@ -445,4 +451,167 @@ function enforceMinPeakDelay(
   if (peakIdx < checkpoints.length - 1) {
     checkpoints[peakIdx].baseBoostValue = forcedPeak;
   }
+}
+
+interface DirectionRuleOptions {
+  minBoostPct: number;
+  maxBoostPct: number;
+  crashPct?: number;
+  minRunLength: number;
+}
+
+function enforceRideDirectionRules(
+  checkpoints: RideCheckpoint[],
+  options: DirectionRuleOptions
+): void {
+  if (checkpoints.length < 4 || options.minRunLength <= 1) {
+    return;
+  }
+
+  const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, options.crashPct);
+  if (preCrashLastIndex < 2) {
+    return;
+  }
+
+  const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
+  const threshold = Math.max(range * 0.0005, 0.000001);
+  const minStep = Math.max(range * 0.01, 0.00001);
+
+  enforceDirectionRunPass(checkpoints, preCrashLastIndex, threshold, minStep, options);
+  enforceSingleMaxPreCrash(checkpoints, preCrashLastIndex, minStep, threshold, options);
+  enforceDirectionRunPass(checkpoints, preCrashLastIndex, threshold, minStep, options);
+}
+
+function getPreCrashLastCheckpointIndex(
+  checkpoints: RideCheckpoint[],
+  crashPct?: number
+): number {
+  const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 0.99);
+  let lastIndex = checkpoints.length - 2; // Keep final crash endpoint out.
+
+  for (let i = 0; i < checkpoints.length; i++) {
+    if (checkpoints[i].timeOffsetPct >= effectiveCrashPct) {
+      lastIndex = i - 1;
+      break;
+    }
+  }
+
+  return Math.max(1, Math.min(lastIndex, checkpoints.length - 2));
+}
+
+function enforceDirectionRunPass(
+  checkpoints: RideCheckpoint[],
+  preCrashLastIndex: number,
+  threshold: number,
+  minStep: number,
+  options: DirectionRuleOptions
+): void {
+  let currentDirection = 0;
+  let runLength = 0;
+
+  for (let i = 1; i <= preCrashLastIndex; i++) {
+    const prev = checkpoints[i - 1].baseBoostValue;
+    const curr = checkpoints[i].baseBoostValue;
+    let direction = directionOf(curr - prev, threshold);
+
+    if (direction === 0) {
+      direction = currentDirection !== 0
+        ? currentDirection
+        : inferDirection(checkpoints, i, preCrashLastIndex, threshold);
+    }
+
+    if (currentDirection === 0) {
+      currentDirection = direction;
+      runLength = 1;
+    } else if (direction !== currentDirection) {
+      const remainingMoves = preCrashLastIndex - i + 1;
+      if (runLength < options.minRunLength || remainingMoves < options.minRunLength) {
+        direction = currentDirection;
+        runLength += 1;
+      } else {
+        currentDirection = direction;
+        runLength = 1;
+      }
+    } else {
+      runLength += 1;
+    }
+
+    const desiredDelta = Math.max(Math.abs(curr - prev), minStep);
+    let adjusted = clampValue(
+      prev + currentDirection * desiredDelta,
+      options.minBoostPct,
+      options.maxBoostPct
+    );
+
+    if (Math.abs(adjusted - prev) <= threshold) {
+      adjusted = clampValue(
+        prev + currentDirection * minStep,
+        options.minBoostPct,
+        options.maxBoostPct
+      );
+    }
+
+    checkpoints[i].baseBoostValue = roundToDecimals(adjusted, 6);
+  }
+}
+
+function enforceSingleMaxPreCrash(
+  checkpoints: RideCheckpoint[],
+  preCrashLastIndex: number,
+  minStep: number,
+  threshold: number,
+  options: DirectionRuleOptions
+): void {
+  let maxValue = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i <= preCrashLastIndex; i++) {
+    if (checkpoints[i].baseBoostValue > maxValue) {
+      maxValue = checkpoints[i].baseBoostValue;
+    }
+  }
+
+  let seenMax = false;
+  let duplicateCount = 0;
+  for (let i = 0; i <= preCrashLastIndex; i++) {
+    const value = checkpoints[i].baseBoostValue;
+    if (Math.abs(value - maxValue) > threshold) {
+      continue;
+    }
+
+    if (!seenMax) {
+      seenMax = true;
+      continue;
+    }
+
+    duplicateCount += 1;
+    const lowered = clampValue(
+      maxValue - (minStep * 0.5 * duplicateCount),
+      options.minBoostPct,
+      options.maxBoostPct
+    );
+    checkpoints[i].baseBoostValue = roundToDecimals(lowered, 6);
+  }
+}
+
+function inferDirection(
+  checkpoints: RideCheckpoint[],
+  startIndex: number,
+  preCrashLastIndex: number,
+  threshold: number
+): number {
+  for (let i = startIndex + 1; i <= preCrashLastIndex; i++) {
+    const direction = directionOf(
+      checkpoints[i].baseBoostValue - checkpoints[i - 1].baseBoostValue,
+      threshold
+    );
+    if (direction !== 0) {
+      return direction;
+    }
+  }
+  return 1;
+}
+
+function directionOf(delta: number, threshold: number): number {
+  if (delta > threshold) return 1;
+  if (delta < -threshold) return -1;
+  return 0;
 }

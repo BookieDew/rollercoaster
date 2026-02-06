@@ -14,6 +14,15 @@ export interface FinalBoostInput {
   config: FinalBoostConfig;
 }
 
+export interface FinalBoostDetails {
+  finalBoostPct: number;
+  rawBoost: number;
+  effectiveMaxBoost: number;
+  minBoost: number;
+  isClampedToMax: boolean;
+  isClampedToMin: boolean;
+}
+
 /**
  * Combines ride value with ticket strength, clamps to operator min/max caps,
  * and applies crash-to-zero override if ride has ended.
@@ -26,6 +35,10 @@ export interface FinalBoostInput {
  * @returns Final boost percentage (0 if ride ended)
  */
 export function calculateFinalBoost(input: FinalBoostInput): number {
+  return calculateFinalBoostDetails(input).finalBoostPct;
+}
+
+export function calculateFinalBoostDetails(input: FinalBoostInput): FinalBoostDetails {
   const {
     rideValue,
     ticketStrength,
@@ -37,7 +50,14 @@ export function calculateFinalBoost(input: FinalBoostInput): number {
 
   // Crash to zero if ride has ended
   if (hasRideEnded) {
-    return 0;
+    return {
+      finalBoostPct: 0,
+      rawBoost: 0,
+      effectiveMaxBoost: config.maxBoostPct,
+      minBoost: config.minBoostPct,
+      isClampedToMax: false,
+      isClampedToMin: false,
+    };
   }
 
   const effectiveMaxBoost = computeMaxEligibleBoostPct(
@@ -56,7 +76,14 @@ export function calculateFinalBoost(input: FinalBoostInput): number {
   // Clamp to operator min/max bounds
   const clampedBoost = clampValue(rawBoost, config.minBoostPct, effectiveMaxBoost);
 
-  return roundToDecimals(clampedBoost, 6);
+  return {
+    finalBoostPct: roundToDecimals(clampedBoost, 6),
+    rawBoost,
+    effectiveMaxBoost,
+    minBoost: config.minBoostPct,
+    isClampedToMax: rawBoost > effectiveMaxBoost,
+    isClampedToMin: rawBoost < config.minBoostPct,
+  };
 }
 
 /**

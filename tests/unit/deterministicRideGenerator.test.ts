@@ -161,6 +161,7 @@ describe('deterministicRideGenerator', () => {
         expect((earliestPeak?.timeOffsetPct ?? 0)).toBeGreaterThanOrEqual(minAllowedPct);
       }
     });
+
   });
 
   describe('interpolateRideValue', () => {
