@@ -50,6 +50,13 @@ Reason: We keep ride timing internal to preserve unpredictability and avoid lett
 Operators can optionally set the thresholds at which max boost becomes reachable:
 `max_boost_min_selections` and `max_boost_min_combined_odds`. If omitted, max boost is always reachable (old behavior).
 
+Operators can also tune boost-model behavior per profile:
+- `max_eligibility_selection_weight` (default `0.75`)
+- `max_eligibility_odds_weight` (default `0.25`)
+- `effective_min_floor_rate` (default `0.35`)
+- `ride_mode` (`WAVES` default, or `LINEAR`)
+The two weights must sum to `1.0`.
+
 Optional risk controls:
 - Set `max_boost_min_selections` and/or `max_boost_min_combined_odds` to make max boost reachable only for stronger tickets.
 - Leave both unset to allow max boost at any eligible ticket strength.
@@ -70,6 +77,10 @@ Optional risk controls:
   "max_boost_pct": 0.5,
   "max_boost_min_selections": 6,
   "max_boost_min_combined_odds": 12.0,
+  "max_eligibility_selection_weight": 0.75,
+  "max_eligibility_odds_weight": 0.25,
+  "effective_min_floor_rate": 0.35,
+  "ride_mode": "WAVES",
   "ride_duration_seconds": 3600
 }
 
@@ -85,6 +96,10 @@ Optional risk controls:
   "max_boost_pct": 0.5,
   "max_boost_min_selections": 6,
   "max_boost_min_combined_odds": 12.0,
+  "max_eligibility_selection_weight": 0.75,
+  "max_eligibility_odds_weight": 0.25,
+  "effective_min_floor_rate": 0.35,
+  "ride_mode": "WAVES",
   "ride_duration_seconds": 3600,
   "is_active": true,
   "created_at": "2024-01-15T10:30:00.000Z",
@@ -109,6 +124,10 @@ Optional risk controls:
   "max_boost_pct": 0.5,
   "max_boost_min_selections": 6,
   "max_boost_min_combined_odds": 12.0,
+  "max_eligibility_selection_weight": 0.75,
+  "max_eligibility_odds_weight": 0.25,
+  "effective_min_floor_rate": 0.35,
+  "ride_mode": "WAVES",
   "ride_duration_seconds": 3600,
   "is_active": true,
   "created_at": "2024-01-15T10:30:00.000Z",
@@ -134,6 +153,10 @@ Optional risk controls:
       "max_boost_pct": 0.5,
       "max_boost_min_selections": 6,
       "max_boost_min_combined_odds": 12.0,
+      "max_eligibility_selection_weight": 0.75,
+      "max_eligibility_odds_weight": 0.25,
+      "effective_min_floor_rate": 0.35,
+      "ride_mode": "WAVES",
       "ride_duration_seconds": 3600,
       "is_active": true,
       "created_at": "2024-01-15T10:30:00.000Z",
@@ -154,6 +177,10 @@ Optional risk controls:
   "max_boost_pct": 0.75,
   "max_boost_min_selections": 8,
   "max_boost_min_combined_odds": 20.0,
+  "max_eligibility_selection_weight": 0.8,
+  "max_eligibility_odds_weight": 0.2,
+  "effective_min_floor_rate": 0.4,
+  "ride_mode": "LINEAR",
   "is_active": true
 }
 

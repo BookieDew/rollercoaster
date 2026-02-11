@@ -3,6 +3,9 @@ export interface FinalBoostConfig {
   maxBoostPct: number;
   maxBoostMinSelections: number | null;
   maxBoostMinCombinedOdds: number | null;
+  maxEligibilitySelectionWeight?: number;
+  maxEligibilityOddsWeight?: number;
+  effectiveMinFloorRate?: number;
 }
 
 export interface FinalBoostInput {
@@ -131,6 +134,9 @@ export function computeBoostModelDetails(
   combinedOdds: number,
   config: FinalBoostConfig
 ): BoostModelDetails {
+  const selectionWeight = config.maxEligibilitySelectionWeight ?? MAX_ELIGIBILITY_SELECTION_WEIGHT;
+  const oddsWeight = config.maxEligibilityOddsWeight ?? MAX_ELIGIBILITY_ODDS_WEIGHT;
+  const effectiveMinFloorRate = config.effectiveMinFloorRate ?? EFFECTIVE_MIN_FLOOR_RATE;
   const selectionTarget = config.maxBoostMinSelections ?? 0;
   const oddsTarget = config.maxBoostMinCombinedOdds ?? 0;
   const hasSelectionTarget = selectionTarget > 0;
@@ -153,8 +159,8 @@ export function computeBoostModelDetails(
     const oddsComponent = Math.pow(oddsRatio!, MAX_ELIGIBILITY_EXPONENT);
     eligibilityFactor = Math.min(
       1,
-      Math.pow(selectionComponent, MAX_ELIGIBILITY_SELECTION_WEIGHT)
-        * Math.pow(oddsComponent, MAX_ELIGIBILITY_ODDS_WEIGHT)
+      Math.pow(selectionComponent, selectionWeight)
+        * Math.pow(oddsComponent, oddsWeight)
     );
   } else if (hasSelectionTarget) {
     // If only one threshold is configured, it should fully drive the cap.
@@ -168,16 +174,16 @@ export function computeBoostModelDetails(
     + (config.maxBoostPct - config.minBoostPct) * eligibilityFactor;
   const boundedMax = Math.max(minBoost, effectiveMax);
   const floorLiftFactor = hasAnyTarget
-    ? (eligibilityFactor * EFFECTIVE_MIN_FLOOR_RATE)
+    ? (eligibilityFactor * effectiveMinFloorRate)
     : 0;
   const effectiveMin = minBoost + ((boundedMax - minBoost) * floorLiftFactor);
   const boundedMin = clampValue(effectiveMin, minBoost, boundedMax);
 
   return {
-    selectionWeight: MAX_ELIGIBILITY_SELECTION_WEIGHT,
-    oddsWeight: MAX_ELIGIBILITY_ODDS_WEIGHT,
+    selectionWeight,
+    oddsWeight,
     maxEligibilityExponent: MAX_ELIGIBILITY_EXPONENT,
-    effectiveMinFloorRate: EFFECTIVE_MIN_FLOOR_RATE,
+    effectiveMinFloorRate,
     selectionRatio: selectionRatio === null ? null : roundToDecimals(selectionRatio, 6),
     oddsRatio: oddsRatio === null ? null : roundToDecimals(oddsRatio, 6),
     eligibilityFactor: roundToDecimals(eligibilityFactor, 6),

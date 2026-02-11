@@ -1,5 +1,6 @@
 import type { Selection } from './ticket';
 import type { RidePathPoint } from './ride';
+import type { RideMode } from './rewardProfile';
 
 export interface BoostModelSnapshot {
   selectionWeight: number;
@@ -28,6 +29,7 @@ export interface LockSnapshot {
   selections: Selection[];
   disqualifiedSelections: Selection[];
   profileId: string;
+  rideMode: RideMode;
   minSelections: number;
   minCombinedOdds: number;
   minSelectionOdds: number;
@@ -35,6 +37,9 @@ export interface LockSnapshot {
   maxBoostPct: number;
   maxBoostMinSelections: number | null;
   maxBoostMinCombinedOdds: number | null;
+  maxEligibilitySelectionWeight: number;
+  maxEligibilityOddsWeight: number;
+  effectiveMinFloorRate: number;
   rideDurationSeconds: number;
   checkpointCount: number;
   volatility: number;

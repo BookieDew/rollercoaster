@@ -5,6 +5,10 @@ import type { RewardProfileVersion, CreateRewardProfileInput, UpdateRewardProfil
 const TABLE = 'reward_profile_versions';
 const INTERNAL_CHECKPOINT_COUNT = 12;
 const INTERNAL_VOLATILITY = 0.5;
+const DEFAULT_MAX_ELIGIBILITY_SELECTION_WEIGHT = 0.75;
+const DEFAULT_MAX_ELIGIBILITY_ODDS_WEIGHT = 0.25;
+const DEFAULT_EFFECTIVE_MIN_FLOOR_RATE = 0.35;
+const DEFAULT_RIDE_MODE = 'WAVES';
 
 export async function create(input: CreateRewardProfileInput): Promise<RewardProfileVersion> {
   const id = uuidv4();
@@ -21,6 +25,13 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
     max_boost_pct: input.maxBoostPct,
     max_boost_min_selections: input.maxBoostMinSelections ?? null,
     max_boost_min_combined_odds: input.maxBoostMinCombinedOdds ?? null,
+    max_eligibility_selection_weight: input.maxEligibilitySelectionWeight
+      ?? DEFAULT_MAX_ELIGIBILITY_SELECTION_WEIGHT,
+    max_eligibility_odds_weight: input.maxEligibilityOddsWeight
+      ?? DEFAULT_MAX_ELIGIBILITY_ODDS_WEIGHT,
+    effective_min_floor_rate: input.effectiveMinFloorRate
+      ?? DEFAULT_EFFECTIVE_MIN_FLOOR_RATE,
+    ride_mode: input.rideMode ?? DEFAULT_RIDE_MODE,
     ride_duration_seconds: input.rideDurationSeconds,
     checkpoint_count: INTERNAL_CHECKPOINT_COUNT,
     volatility: INTERNAL_VOLATILITY,
@@ -69,6 +80,18 @@ export async function update(id: string, input: UpdateRewardProfileInput): Promi
   if (input.maxBoostMinCombinedOdds !== undefined) {
     updates.max_boost_min_combined_odds = input.maxBoostMinCombinedOdds;
   }
+  if (input.maxEligibilitySelectionWeight !== undefined) {
+    updates.max_eligibility_selection_weight = input.maxEligibilitySelectionWeight;
+  }
+  if (input.maxEligibilityOddsWeight !== undefined) {
+    updates.max_eligibility_odds_weight = input.maxEligibilityOddsWeight;
+  }
+  if (input.effectiveMinFloorRate !== undefined) {
+    updates.effective_min_floor_rate = input.effectiveMinFloorRate;
+  }
+  if (input.rideMode !== undefined) {
+    updates.ride_mode = input.rideMode;
+  }
   if (input.rideDurationSeconds !== undefined) updates.ride_duration_seconds = input.rideDurationSeconds;
   if (input.isActive !== undefined) updates.is_active = input.isActive;
 
@@ -97,6 +120,18 @@ function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
     maxBoostMinCombinedOdds: record.max_boost_min_combined_odds === null
       ? null
       : Number(record.max_boost_min_combined_odds),
+    maxEligibilitySelectionWeight: record.max_eligibility_selection_weight === undefined
+      ? DEFAULT_MAX_ELIGIBILITY_SELECTION_WEIGHT
+      : Number(record.max_eligibility_selection_weight),
+    maxEligibilityOddsWeight: record.max_eligibility_odds_weight === undefined
+      ? DEFAULT_MAX_ELIGIBILITY_ODDS_WEIGHT
+      : Number(record.max_eligibility_odds_weight),
+    effectiveMinFloorRate: record.effective_min_floor_rate === undefined
+      ? DEFAULT_EFFECTIVE_MIN_FLOOR_RATE
+      : Number(record.effective_min_floor_rate),
+    rideMode: record.ride_mode === undefined
+      ? DEFAULT_RIDE_MODE
+      : record.ride_mode as 'WAVES' | 'LINEAR',
     rideDurationSeconds: record.ride_duration_seconds as number,
     isActive: Boolean(record.is_active),
     createdAt: record.created_at as string,

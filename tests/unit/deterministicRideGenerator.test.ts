@@ -1,5 +1,8 @@
 import {
   generateSeed,
+  deriveCrashPct,
+  deriveCrashPhase,
+  getCrashBiasConfig,
   generateRide,
   interpolateRideValue,
   calculateElapsedPct,
@@ -29,6 +32,125 @@ describe('deterministicRideGenerator', () => {
       const seed = generateSeed('reward-1', 'user-1', 'profile-1');
 
       expect(seed).toMatch(/^[a-f0-9]{64}$/);
+    });
+  });
+
+  describe('crash split distributions', () => {
+    it('should follow configured crash-time bucket weights over 15k deterministic samples', () => {
+      const sampleCount = 15000;
+      const durationSeconds = 15;
+      const minCrashSeconds = 2;
+      const config = getCrashBiasConfig();
+      const earlyEnd = durationSeconds * config.timeBucketRanges.earlyEndPct;
+      const midEnd = durationSeconds * config.timeBucketRanges.midEndPct;
+
+      let earlyCount = 0;
+      let midCount = 0;
+      let lateCount = 0;
+
+      for (let i = 0; i < sampleCount; i++) {
+        const crashPct = deriveCrashPct(
+          `bucket-sample-${i}`,
+          durationSeconds,
+          minCrashSeconds
+        );
+        const crashSeconds = crashPct * durationSeconds;
+
+        expect(crashSeconds).toBeGreaterThanOrEqual(minCrashSeconds);
+        if (crashSeconds < earlyEnd) {
+          earlyCount++;
+        } else if (crashSeconds < midEnd) {
+          midCount++;
+        } else {
+          lateCount++;
+        }
+      }
+
+      const earlyRatio = earlyCount / sampleCount;
+      const midRatio = midCount / sampleCount;
+      const lateRatio = lateCount / sampleCount;
+
+      expect(earlyRatio).toBeCloseTo(config.timeBucketWeights.early, 1);
+      expect(midRatio).toBeCloseTo(config.timeBucketWeights.mid, 1);
+      expect(lateRatio).toBeCloseTo(config.timeBucketWeights.late, 1);
+    });
+
+    it('should follow configured crash-phase weights over 15k deterministic samples', () => {
+      const sampleCount = 15000;
+      const config = getCrashBiasConfig();
+      let upCount = 0;
+      let peakCount = 0;
+      let downCount = 0;
+
+      for (let i = 0; i < sampleCount; i++) {
+        const phase = deriveCrashPhase(`phase-sample-${i}`);
+        if (phase === 'UP') upCount++;
+        if (phase === 'PEAK') peakCount++;
+        if (phase === 'DOWN') downCount++;
+      }
+
+      const upRatio = upCount / sampleCount;
+      const peakRatio = peakCount / sampleCount;
+      const downRatio = downCount / sampleCount;
+
+      expect(upRatio).toBeCloseTo(config.phaseWeights.up, 1);
+      expect(peakRatio).toBeCloseTo(config.phaseWeights.peak, 1);
+      expect(downRatio).toBeCloseTo(config.phaseWeights.down, 1);
+    });
+
+    it('should realize UP/PEAK/DOWN split on generated rides over 15k samples', () => {
+      const sampleCount = 15000;
+      const durationSeconds = 15;
+      const minCrashSeconds = 2;
+      const minBoostPct = 0.05;
+      const maxBoostPct = 1;
+      const range = maxBoostPct - minBoostPct;
+      const threshold = Math.max(range * 0.003, 0.00005);
+      const config = getCrashBiasConfig();
+      let upCount = 0;
+      let peakCount = 0;
+      let downCount = 0;
+
+      for (let i = 0; i < sampleCount; i++) {
+        const seed = `phase-realized-${i}`;
+        const crashPct = deriveCrashPct(seed, durationSeconds, minCrashSeconds);
+        const ride = generateRide(seed, {
+          checkpointCount: 22,
+          volatility: 0.5,
+          minBoostPct,
+          maxBoostPct,
+          ticketStrength: 0.6,
+          durationSeconds,
+          crashPct,
+          minPeakDelaySeconds: 2,
+          rideMode: 'WAVES',
+        });
+
+        const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+        if (preCrash.length < 2) {
+          continue;
+        }
+
+        const previous = preCrash[preCrash.length - 2].baseBoostValue;
+        const current = preCrash[preCrash.length - 1].baseBoostValue;
+        const delta = current - previous;
+
+        if (delta > threshold) {
+          upCount++;
+        } else if (delta < -threshold) {
+          downCount++;
+        } else {
+          peakCount++;
+        }
+      }
+
+      const upRatio = upCount / sampleCount;
+      const peakRatio = peakCount / sampleCount;
+      const downRatio = downCount / sampleCount;
+
+      expect(upRatio).toBeCloseTo(config.phaseWeights.up, 1);
+      expect(peakRatio).toBeCloseTo(config.phaseWeights.peak, 1);
+      expect(downRatio).toBeCloseTo(config.phaseWeights.down, 1);
     });
   });
 
@@ -306,6 +428,31 @@ describe('deterministicRideGenerator', () => {
         for (const checkpoint of preCrash) {
           expect(checkpoint.baseBoostValue).toBeGreaterThanOrEqual(startValue);
         }
+      }
+    });
+
+    it('should support LINEAR mode with monotonic pre-crash rise', () => {
+      const crashPct = 0.78;
+      const ride = generateRide('linear-mode-test', {
+        ...config,
+        checkpointCount: 30,
+        minBoostPct: 0.05,
+        maxBoostPct: 0.8,
+        ticketStrength: 0.5,
+        crashPct,
+        rideMode: 'LINEAR',
+      });
+
+      const preCrash = ride.checkpoints.filter((cp) => cp.timeOffsetPct < crashPct);
+      for (let i = 1; i < preCrash.length; i++) {
+        expect(preCrash[i].baseBoostValue).toBeGreaterThanOrEqual(preCrash[i - 1].baseBoostValue);
+      }
+
+      const postCrash = ride.checkpoints.filter(
+        (cp) => cp.timeOffsetPct >= crashPct && cp.timeOffsetPct < 1
+      );
+      for (const checkpoint of postCrash) {
+        expect(checkpoint.baseBoostValue).toBe(0);
       }
     });
 

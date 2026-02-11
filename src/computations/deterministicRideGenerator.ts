@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { RideMode } from '../types/rewardProfile';
 
 export interface RideCheckpoint {
   index: number;
@@ -11,6 +12,7 @@ export interface RideConfig {
   volatility: number;
   minBoostPct: number;
   maxBoostPct: number;
+  rideMode?: RideMode;
   ticketStrength?: number;
   durationSeconds?: number;
   crashPct?: number;
@@ -23,9 +25,51 @@ export interface RideParams {
   crashPct: number;
 }
 
+export type CrashPhase = 'UP' | 'PEAK' | 'DOWN';
+
 export interface GeneratedRide {
   checkpoints: RideCheckpoint[];
   seed: string;
+}
+
+const CRASH_TIME_BUCKET_WEIGHTS = {
+  EARLY: 0.10,
+  MID: 0.65,
+  LATE: 0.25,
+} as const;
+
+const CRASH_TIME_BUCKET_RANGES = {
+  EARLY_END_PCT: 0.25,
+  MID_END_PCT: 0.80,
+} as const;
+
+const CRASH_PHASE_WEIGHTS = {
+  UP: 0.50,
+  PEAK: 0.20,
+  DOWN: 0.30,
+} as const;
+
+export function getCrashBiasConfig(): {
+  timeBucketWeights: { early: number; mid: number; late: number };
+  timeBucketRanges: { earlyEndPct: number; midEndPct: number };
+  phaseWeights: { up: number; peak: number; down: number };
+} {
+  return {
+    timeBucketWeights: {
+      early: CRASH_TIME_BUCKET_WEIGHTS.EARLY,
+      mid: CRASH_TIME_BUCKET_WEIGHTS.MID,
+      late: CRASH_TIME_BUCKET_WEIGHTS.LATE,
+    },
+    timeBucketRanges: {
+      earlyEndPct: CRASH_TIME_BUCKET_RANGES.EARLY_END_PCT,
+      midEndPct: CRASH_TIME_BUCKET_RANGES.MID_END_PCT,
+    },
+    phaseWeights: {
+      up: CRASH_PHASE_WEIGHTS.UP,
+      peak: CRASH_PHASE_WEIGHTS.PEAK,
+      down: CRASH_PHASE_WEIGHTS.DOWN,
+    },
+  };
 }
 
 /**
@@ -118,12 +162,95 @@ export function deriveCrashPct(
 
   const minCrash = Math.max(0, Math.min(minCrashSeconds, durationSeconds));
   const rng = new SeededRandom(`crash:${seed}`);
-  const alpha = 10;
-  const beta = 5;
-  const sample = betaSample(rng, alpha, beta);
-  const crashSeconds = minCrash + sample * Math.max(durationSeconds - minCrash, 0);
+  const crashSeconds = sampleCrashSecondsFromBuckets(
+    rng,
+    minCrash,
+    durationSeconds
+  );
   const crashPct = crashSeconds / durationSeconds;
   return roundToDecimals(clampValue(crashPct, 0.01, 0.99), 4);
+}
+
+export function deriveCrashPhase(seed: string): CrashPhase {
+  const rng = new SeededRandom(`crash-phase:${seed}`);
+  const roll = rng.next();
+
+  if (roll < CRASH_PHASE_WEIGHTS.UP) {
+    return 'UP';
+  }
+  if (roll < CRASH_PHASE_WEIGHTS.UP + CRASH_PHASE_WEIGHTS.PEAK) {
+    return 'PEAK';
+  }
+  return 'DOWN';
+}
+
+function sampleCrashSecondsFromBuckets(
+  rng: SeededRandom,
+  minCrashSeconds: number,
+  durationSeconds: number
+): number {
+  if (durationSeconds <= 0) {
+    return 0;
+  }
+
+  const minCrash = clampValue(minCrashSeconds, 0, durationSeconds);
+  if (minCrash >= durationSeconds) {
+    return durationSeconds;
+  }
+
+  const earlyEnd = durationSeconds * CRASH_TIME_BUCKET_RANGES.EARLY_END_PCT;
+  const midEnd = durationSeconds * CRASH_TIME_BUCKET_RANGES.MID_END_PCT;
+
+  const buckets: Array<{ start: number; end: number; weight: number }> = [
+    {
+      start: minCrash,
+      end: Math.max(minCrash, Math.min(durationSeconds, earlyEnd)),
+      weight: CRASH_TIME_BUCKET_WEIGHTS.EARLY,
+    },
+    {
+      start: Math.max(minCrash, Math.min(durationSeconds, earlyEnd)),
+      end: Math.max(Math.max(minCrash, earlyEnd), Math.min(durationSeconds, midEnd)),
+      weight: CRASH_TIME_BUCKET_WEIGHTS.MID,
+    },
+    {
+      start: Math.max(minCrash, Math.min(durationSeconds, midEnd)),
+      end: durationSeconds,
+      weight: CRASH_TIME_BUCKET_WEIGHTS.LATE,
+    },
+  ]
+    .filter((bucket) => bucket.end - bucket.start > 0.000001);
+
+  if (buckets.length === 0) {
+    return minCrash;
+  }
+
+  const selected = pickWeightedBucket(rng, buckets);
+  const span = selected.end - selected.start;
+  if (span <= 0.000001) {
+    return selected.start;
+  }
+
+  return selected.start + (rng.next() * span);
+}
+
+function pickWeightedBucket<T extends { weight: number }>(
+  rng: SeededRandom,
+  buckets: T[]
+): T {
+  const totalWeight = buckets.reduce((sum, bucket) => sum + bucket.weight, 0);
+  if (totalWeight <= 0) {
+    return buckets[buckets.length - 1];
+  }
+
+  let roll = rng.next() * totalWeight;
+  for (const bucket of buckets) {
+    roll -= bucket.weight;
+    if (roll <= 0) {
+      return bucket;
+    }
+  }
+
+  return buckets[buckets.length - 1];
 }
 
 /**
@@ -141,6 +268,7 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
     volatility,
     minBoostPct,
     maxBoostPct,
+    rideMode = 'WAVES',
     ticketStrength = 0,
     durationSeconds,
     crashPct,
@@ -157,6 +285,18 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
   const startingFloorValue = checkpoints[0].baseBoostValue;
 
   const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 0.99);
+  const crashPhase = deriveCrashPhase(seed);
+  if (rideMode === 'LINEAR') {
+    generateLinearCheckpointValues(checkpoints, {
+      crashPct: effectiveCrashPct,
+      minBoostPct,
+      maxBoostPct,
+      startValue: startingFloorValue,
+    });
+    checkpoints[checkpoints.length - 1].baseBoostValue = 0;
+    return { checkpoints, seed };
+  }
+
   const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, effectiveCrashPct);
 
   if (preCrashLastIndex >= 1) {
@@ -236,11 +376,56 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
     crashPct,
     minPreCrashValue: startingFloorValue,
   });
+  enforceCrashPhaseNearBoundary(checkpoints, {
+    minBoostPct,
+    maxBoostPct,
+    crashPct: effectiveCrashPct,
+    floorValue: startingFloorValue,
+    crashPhase,
+  });
 
   const lastIndex = checkpoints.length - 1;
   checkpoints[lastIndex].baseBoostValue = 0;
 
   return { checkpoints, seed };
+}
+
+function generateLinearCheckpointValues(
+  checkpoints: RideCheckpoint[],
+  options: {
+    crashPct: number;
+    minBoostPct: number;
+    maxBoostPct: number;
+    startValue: number;
+  }
+): void {
+  if (checkpoints.length < 2) {
+    return;
+  }
+
+  const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, options.crashPct);
+  const firstTimePct = checkpoints[0].timeOffsetPct;
+  const preCrashTimePct = checkpoints[preCrashLastIndex].timeOffsetPct;
+  const preCrashDenominator = Math.max(preCrashTimePct - firstTimePct, 0.000001);
+  const startValue = clampValue(options.startValue, options.minBoostPct, options.maxBoostPct);
+  const peakValue = options.maxBoostPct;
+
+  for (let i = 0; i <= preCrashLastIndex; i++) {
+    const progress = clampValue(
+      (checkpoints[i].timeOffsetPct - firstTimePct) / preCrashDenominator,
+      0,
+      1
+    );
+    const target = startValue + ((peakValue - startValue) * progress);
+    checkpoints[i].baseBoostValue = roundToDecimals(
+      clampValue(target, options.minBoostPct, options.maxBoostPct),
+      6
+    );
+  }
+
+  for (let i = preCrashLastIndex + 1; i < checkpoints.length - 1; i++) {
+    checkpoints[i].baseBoostValue = 0;
+  }
 }
 
 function initializeCheckpoints(
@@ -1469,4 +1654,64 @@ function enforceNoFlatSegmentsBeforeCrash(
 
     checkpoints[i].baseBoostValue = roundToDecimals(adjusted, 6);
   }
+}
+
+interface CrashPhaseBoundaryOptions {
+  minBoostPct: number;
+  maxBoostPct: number;
+  crashPct?: number;
+  floorValue: number;
+  crashPhase: CrashPhase;
+}
+
+function enforceCrashPhaseNearBoundary(
+  checkpoints: RideCheckpoint[],
+  options: CrashPhaseBoundaryOptions
+): void {
+  if (checkpoints.length < 3) {
+    return;
+  }
+
+  const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, options.crashPct);
+  if (preCrashLastIndex < 1) {
+    return;
+  }
+
+  const previousIndex = preCrashLastIndex - 1;
+  const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
+  const floor = clampValue(options.floorValue, options.minBoostPct, options.maxBoostPct);
+  const step = Math.max(range * 0.015, 0.00025);
+  const peakStep = Math.max(range * 0.002, 0.00005);
+
+  let previousValue = checkpoints[previousIndex].baseBoostValue;
+  let currentValue = checkpoints[preCrashLastIndex].baseBoostValue;
+
+  if (options.crashPhase === 'UP') {
+    if (currentValue <= previousValue + peakStep) {
+      if (previousValue >= options.maxBoostPct - step) {
+        previousValue = clampValue(previousValue - step, floor, options.maxBoostPct);
+        checkpoints[previousIndex].baseBoostValue = roundToDecimals(previousValue, 6);
+      }
+      currentValue = clampValue(previousValue + step, floor, options.maxBoostPct);
+      checkpoints[preCrashLastIndex].baseBoostValue = roundToDecimals(currentValue, 6);
+    }
+    return;
+  }
+
+  if (options.crashPhase === 'DOWN') {
+    if (currentValue >= previousValue - peakStep) {
+      if (previousValue <= floor + step) {
+        previousValue = clampValue(previousValue + step, floor, options.maxBoostPct);
+        checkpoints[previousIndex].baseBoostValue = roundToDecimals(previousValue, 6);
+      }
+      currentValue = clampValue(previousValue - step, floor, options.maxBoostPct);
+      checkpoints[preCrashLastIndex].baseBoostValue = roundToDecimals(currentValue, 6);
+    }
+    return;
+  }
+
+  // PEAK zone: keep pre-crash value very close to the previous point (near top zone),
+  // while avoiding an exact flat segment.
+  const target = clampValue(previousValue + peakStep, floor, options.maxBoostPct);
+  checkpoints[preCrashLastIndex].baseBoostValue = roundToDecimals(target, 6);
 }

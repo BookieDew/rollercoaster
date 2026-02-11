@@ -47,3 +47,8 @@ export {
 export {
   buildEffectiveRidePath,
 } from './ridePathBuilder';
+
+export {
+  calculateLinearBoostPctAtElapsed,
+  buildLinearEffectiveRidePath,
+} from './linearRideMode';

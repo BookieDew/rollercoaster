@@ -58,6 +58,17 @@ export async function createProfile(
       },
     };
   }
+  const selectionWeight = input.maxEligibilitySelectionWeight ?? 0.75;
+  const oddsWeight = input.maxEligibilityOddsWeight ?? 0.25;
+  if (Math.abs((selectionWeight + oddsWeight) - 1) >= 0.0001) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.INVALID_CONFIGURATION,
+        message: 'maxEligibilitySelectionWeight + maxEligibilityOddsWeight must equal 1',
+      },
+    };
+  }
 
   const profile = await rewardProfileRepository.create(input);
 
@@ -141,6 +152,8 @@ export async function updateProfile(
   }
   const newMaxBoostMinSelections = input.maxBoostMinSelections ?? existing.maxBoostMinSelections;
   const newMaxBoostMinCombinedOdds = input.maxBoostMinCombinedOdds ?? existing.maxBoostMinCombinedOdds;
+  const newSelectionWeight = input.maxEligibilitySelectionWeight ?? existing.maxEligibilitySelectionWeight;
+  const newOddsWeight = input.maxEligibilityOddsWeight ?? existing.maxEligibilityOddsWeight;
   const effectiveMinSelections = input.minSelections ?? existing.minSelections;
   const effectiveMinCombinedOdds = input.minCombinedOdds ?? existing.minCombinedOdds;
   if (
@@ -166,6 +179,15 @@ export async function updateProfile(
       error: {
         code: ReasonCode.INVALID_CONFIGURATION,
         message: 'maxBoostMinCombinedOdds must be greater than or equal to minCombinedOdds',
+      },
+    };
+  }
+  if (Math.abs((newSelectionWeight + newOddsWeight) - 1) >= 0.0001) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.INVALID_CONFIGURATION,
+        message: 'maxEligibilitySelectionWeight + maxEligibilityOddsWeight must equal 1',
       },
     };
   }

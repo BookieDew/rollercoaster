@@ -7,8 +7,10 @@ import {
   interpolateRideValue,
   computeTicketStrength,
   calculateFinalBoost,
+  computeBoostModelDetails,
   calculateCombinedOdds,
   filterQualifyingSelections,
+  calculateLinearBoostPctAtElapsed,
 } from '../computations';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
@@ -40,6 +42,10 @@ export interface SimulationResult {
     max_boost_pct: number;
     max_boost_min_selections: number | null;
     max_boost_min_combined_odds: number | null;
+    max_eligibility_selection_weight: number;
+    max_eligibility_odds_weight: number;
+    effective_min_floor_rate: number;
+    ride_mode: 'WAVES' | 'LINEAR';
   };
   ticket_analysis?: {
     qualifying_selections: number;
@@ -86,6 +92,10 @@ export async function simulateRide(
     maxBoostPct: number;
     maxBoostMinSelections: number | null;
     maxBoostMinCombinedOdds: number | null;
+    maxEligibilitySelectionWeight: number;
+    maxEligibilityOddsWeight: number;
+    effectiveMinFloorRate: number;
+    rideMode: 'WAVES' | 'LINEAR';
   } = {
     checkpointCount: derived.checkpointCount,
     volatility: derived.volatility,
@@ -94,6 +104,10 @@ export async function simulateRide(
     maxBoostPct: input.maxBoostPct ?? 1.0,
     maxBoostMinSelections: null,
     maxBoostMinCombinedOdds: null,
+    maxEligibilitySelectionWeight: 0.75,
+    maxEligibilityOddsWeight: 0.25,
+    effectiveMinFloorRate: 0.35,
+    rideMode: 'WAVES',
   };
   let minSelections = 3;
   let minSelectionOdds = 1.2;
@@ -120,6 +134,10 @@ export async function simulateRide(
       maxBoostPct: input.maxBoostPct ?? profile.maxBoostPct,
       maxBoostMinSelections: profile.maxBoostMinSelections,
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+      effectiveMinFloorRate: profile.effectiveMinFloorRate,
+      rideMode: profile.rideMode,
     };
     minSelections = profile.minSelections;
     minSelectionOdds = profile.minSelectionOdds;
@@ -156,11 +174,26 @@ export async function simulateRide(
   // Generate ride
   const ride = generateRide(seed, {
     ...simulationConfig,
+    rideMode: simulationConfig.rideMode,
     ticketStrength: rideTicketStrength,
     durationSeconds,
     crashPct: simulationConfig.crashPct,
     minPeakDelaySeconds: 2,
   });
+
+  const boostModelDetails = computeBoostModelDetails(
+    qualifyingSelectionsForBoost,
+    combinedOddsForBoost,
+    {
+      minBoostPct: simulationConfig.minBoostPct,
+      maxBoostPct: simulationConfig.maxBoostPct,
+      maxBoostMinSelections: simulationConfig.maxBoostMinSelections,
+      maxBoostMinCombinedOdds: simulationConfig.maxBoostMinCombinedOdds,
+      maxEligibilitySelectionWeight: simulationConfig.maxEligibilitySelectionWeight,
+      maxEligibilityOddsWeight: simulationConfig.maxEligibilityOddsWeight,
+      effectiveMinFloorRate: simulationConfig.effectiveMinFloorRate,
+    }
+  );
 
   // Generate sample curve points
   const samplePoints = input.samplePoints ?? 100;
@@ -182,19 +215,29 @@ export async function simulateRide(
     const hasEnded = timePct >= simulationConfig.crashPct;
     const finalBoostPct = hasEnded
       ? 0
-      : calculateFinalBoost({
-          rideValue: baseRideValue,
-          ticketStrength,
-          qualifyingSelections: qualifyingSelectionsForBoost,
-          combinedOdds: combinedOddsForBoost,
-          hasRideEnded: false,
-          config: {
-            minBoostPct: simulationConfig.minBoostPct,
-            maxBoostPct: simulationConfig.maxBoostPct,
-            maxBoostMinSelections: simulationConfig.maxBoostMinSelections,
-            maxBoostMinCombinedOdds: simulationConfig.maxBoostMinCombinedOdds,
-          },
-        });
+      : simulationConfig.rideMode === 'LINEAR'
+        ? calculateLinearBoostPctAtElapsed(
+            timePct,
+            simulationConfig.crashPct,
+            boostModelDetails.effectiveMinBoost,
+            boostModelDetails.effectiveMaxBoost
+          )
+        : calculateFinalBoost({
+            rideValue: baseRideValue,
+            ticketStrength,
+            qualifyingSelections: qualifyingSelectionsForBoost,
+            combinedOdds: combinedOddsForBoost,
+            hasRideEnded: false,
+            config: {
+              minBoostPct: simulationConfig.minBoostPct,
+              maxBoostPct: simulationConfig.maxBoostPct,
+              maxBoostMinSelections: simulationConfig.maxBoostMinSelections,
+              maxBoostMinCombinedOdds: simulationConfig.maxBoostMinCombinedOdds,
+              maxEligibilitySelectionWeight: simulationConfig.maxEligibilitySelectionWeight,
+              maxEligibilityOddsWeight: simulationConfig.maxEligibilityOddsWeight,
+              effectiveMinFloorRate: simulationConfig.effectiveMinFloorRate,
+            },
+          });
 
     curve.push({
       time_pct: Math.round(timePct * 10000) / 10000,
@@ -215,6 +258,10 @@ export async function simulateRide(
         max_boost_pct: simulationConfig.maxBoostPct,
         max_boost_min_selections: simulationConfig.maxBoostMinSelections,
         max_boost_min_combined_odds: simulationConfig.maxBoostMinCombinedOdds,
+        max_eligibility_selection_weight: simulationConfig.maxEligibilitySelectionWeight,
+        max_eligibility_odds_weight: simulationConfig.maxEligibilityOddsWeight,
+        effective_min_floor_rate: simulationConfig.effectiveMinFloorRate,
+        ride_mode: simulationConfig.rideMode,
       },
       ticket_analysis: ticketAnalysis,
       checkpoints: ride.checkpoints.map((cp) => ({

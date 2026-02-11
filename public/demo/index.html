@@ -245,6 +245,25 @@
               <label>Max-boost min combined odds (optional)</label>
               <input id="maxBoostMinCombinedOdds" type="number" step="0.01" value="50" />
             </div>
+            <div>
+              <label>Selection weight</label>
+              <input id="maxEligibilitySelectionWeight" type="number" step="0.01" value="0.75" />
+            </div>
+            <div>
+              <label>Odds weight</label>
+              <input id="maxEligibilityOddsWeight" type="number" step="0.01" value="0.25" />
+            </div>
+            <div>
+              <label>Floor rate</label>
+              <input id="effectiveMinFloorRate" type="number" step="0.01" value="0.35" />
+            </div>
+            <div>
+              <label>Ride mode</label>
+              <select id="rideMode">
+                <option value="WAVES">WAVES</option>
+                <option value="LINEAR">LINEAR</option>
+              </select>
+            </div>
           </div>
           <div class="actions" style="margin-top: 12px;">
             <button id="createProfile">Create Profile</button>
@@ -395,11 +414,30 @@
       function updateModelPanel(payload) {
         const details = payload && payload.details ? payload.details : payload;
         const model = details && details.boost_model ? details.boost_model : null;
-        setMetric('modelSplit', model
-          ? `${formatPercent(model.selection_weight, 0)} / ${formatPercent(model.odds_weight, 0)}`
+        const profileSelectionWeight = details && Number.isFinite(Number(details.max_eligibility_selection_weight))
+          ? Number(details.max_eligibility_selection_weight)
+          : null;
+        const profileOddsWeight = details && Number.isFinite(Number(details.max_eligibility_odds_weight))
+          ? Number(details.max_eligibility_odds_weight)
+          : null;
+        const profileFloorRate = details && Number.isFinite(Number(details.effective_min_floor_rate))
+          ? Number(details.effective_min_floor_rate)
+          : null;
+        const splitSelectionWeight = model
+          ? Number(model.selection_weight)
+          : profileSelectionWeight;
+        const splitOddsWeight = model
+          ? Number(model.odds_weight)
+          : profileOddsWeight;
+        const floorRate = model
+          ? Number(model.effective_min_floor_rate)
+          : profileFloorRate;
+
+        setMetric('modelSplit', splitSelectionWeight !== null && splitOddsWeight !== null
+          ? `${formatPercent(splitSelectionWeight, 0)} / ${formatPercent(splitOddsWeight, 0)}`
           : null);
-        setMetric('modelFloorRate', model
-          ? formatPercent(model.effective_min_floor_rate, 0)
+        setMetric('modelFloorRate', floorRate !== null
+          ? formatPercent(floorRate, 0)
           : null);
         setMetric('modelExponent', model
           ? Number(model.max_eligibility_exponent).toFixed(2)
@@ -677,6 +715,10 @@
           max_boost_min_combined_odds: getValue('maxBoostMinCombinedOdds')
             ? Number(getValue('maxBoostMinCombinedOdds'))
             : undefined,
+          max_eligibility_selection_weight: Number(getValue('maxEligibilitySelectionWeight')),
+          max_eligibility_odds_weight: Number(getValue('maxEligibilityOddsWeight')),
+          effective_min_floor_rate: Number(getValue('effectiveMinFloorRate')),
+          ride_mode: getValue('rideMode'),
           ride_duration_seconds: 3600,
         };
 
@@ -786,6 +828,7 @@
           setResponse(err.payload || { error: err.message });
         }
       });
+
     </script>
   </body>
 </html>

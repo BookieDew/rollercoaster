@@ -25,6 +25,10 @@ export async function createProfile(
       maxBoostPct: validated.max_boost_pct,
       maxBoostMinSelections: validated.max_boost_min_selections ?? null,
       maxBoostMinCombinedOdds: validated.max_boost_min_combined_odds ?? null,
+      maxEligibilitySelectionWeight: validated.max_eligibility_selection_weight,
+      maxEligibilityOddsWeight: validated.max_eligibility_odds_weight,
+      effectiveMinFloorRate: validated.effective_min_floor_rate,
+      rideMode: validated.ride_mode,
       rideDurationSeconds: validated.ride_duration_seconds,
     });
 
@@ -121,6 +125,10 @@ export async function updateProfile(
       maxBoostPct: validated.max_boost_pct,
       maxBoostMinSelections: validated.max_boost_min_selections,
       maxBoostMinCombinedOdds: validated.max_boost_min_combined_odds,
+      maxEligibilitySelectionWeight: validated.max_eligibility_selection_weight,
+      maxEligibilityOddsWeight: validated.max_eligibility_odds_weight,
+      effectiveMinFloorRate: validated.effective_min_floor_rate,
+      rideMode: validated.ride_mode,
       rideDurationSeconds: validated.ride_duration_seconds,
       isActive: validated.is_active,
     });

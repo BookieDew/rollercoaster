@@ -185,6 +185,25 @@ describe('finalBoostCalculator', () => {
       expect(improvedSelections - base).toBeGreaterThan(improvedOdds - base);
     });
 
+    it('respects custom weighting when configured', () => {
+      const cfg = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: 100,
+        maxEligibilitySelectionWeight: 0.2,
+        maxEligibilityOddsWeight: 0.8,
+      };
+
+      const base = computeMaxEligibleBoostPct(8, 20, cfg);
+      const improvedSelections = computeMaxEligibleBoostPct(10, 20, cfg); // +25% selection ratio
+      const improvedOdds = computeMaxEligibleBoostPct(8, 25, cfg); // +25% odds ratio
+
+      expect(improvedSelections).toBeGreaterThan(base);
+      expect(improvedOdds).toBeGreaterThan(base);
+      expect(improvedOdds - base).toBeGreaterThan(improvedSelections - base);
+    });
+
     it('fully uses selections when only selection threshold is configured', () => {
       const cfg = {
         minBoostPct: 0.05,
@@ -261,6 +280,26 @@ describe('finalBoostCalculator', () => {
 
       expect(details.finalBoostPct).toBe(details.minBoost);
       expect(details.minBoost).toBeGreaterThan(cfg.minBoostPct);
+    });
+
+    it('respects custom floor rate when configured', () => {
+      const cfgLowFloor = {
+        minBoostPct: 0.05,
+        maxBoostPct: 1.0,
+        maxBoostMinSelections: 20,
+        maxBoostMinCombinedOdds: 100,
+        effectiveMinFloorRate: 0.2,
+      };
+      const cfgHighFloor = {
+        ...cfgLowFloor,
+        effectiveMinFloorRate: 0.6,
+      };
+
+      const lowFloorModel = computeBoostModelDetails(14, 60, cfgLowFloor);
+      const highFloorModel = computeBoostModelDetails(14, 60, cfgHighFloor);
+
+      expect(highFloorModel.effectiveMinBoost).toBeGreaterThan(lowFloorModel.effectiveMinBoost);
+      expect(highFloorModel.effectiveMinBoost).toBeLessThanOrEqual(highFloorModel.effectiveMaxBoost);
     });
   });
 

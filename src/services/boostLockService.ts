@@ -13,11 +13,15 @@ import {
   calculateElapsedPct,
   hasRideEnded as checkRideEnded,
   calculateFinalBoostDetails,
+  computeBoostModelDetails,
   deriveRideParams,
   buildEffectiveRidePath,
+  buildLinearEffectiveRidePath,
+  calculateLinearBoostPctAtElapsed,
 } from '../computations';
 import type { BetBoostLock, LockResponse } from '../types/betBoostLock';
 import type { Selection } from '../types/ticket';
+import type { RidePathPoint } from '../types/ride';
 import { ReasonCode } from '../types/reasonCodes';
 import { config } from '../config';
 
@@ -182,68 +186,101 @@ export async function lockBoost(
   const ticketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
     minSelections: profile.minSelections,
   });
-
-  // Get ride checkpoints and current value
-  const checkpoints = await rideDefinitionRepository.findByRewardId(rewardId);
-  const maxRideValue = getMaxRideValue(checkpoints, crashPct);
-  const rideValue = interpolateRideValue(
-    checkpoints.map((cp) => ({
-      index: cp.checkpointIndex,
-      timeOffsetPct: cp.timeOffsetPct,
-      baseBoostValue: cp.baseBoostValue,
-    })),
-    elapsedPct
-  );
-
-  const ridePath = buildEffectiveRidePath(
-    checkpoints,
-    60,
-    crashPct,
-    ticketStrength,
-    {
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-    },
+  const finalBoostConfig = {
+    minBoostPct: profile.minBoostPct,
+    maxBoostPct: profile.maxBoostPct,
+    maxBoostMinSelections: profile.maxBoostMinSelections,
+    maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+    maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+    maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+    effectiveMinFloorRate: profile.effectiveMinFloorRate,
+  };
+  const boostModelDetails = computeBoostModelDetails(
     qualifying.length,
-    combinedOdds
+    combinedOdds,
+    finalBoostConfig
   );
+  const boostModel = {
+    selectionWeight: boostModelDetails.selectionWeight,
+    oddsWeight: boostModelDetails.oddsWeight,
+    maxEligibilityExponent: boostModelDetails.maxEligibilityExponent,
+    effectiveMinFloorRate: boostModelDetails.effectiveMinFloorRate,
+    selectionRatio: boostModelDetails.selectionRatio,
+    oddsRatio: boostModelDetails.oddsRatio,
+    eligibilityFactor: boostModelDetails.eligibilityFactor,
+  };
+  const effectiveMinBoostPct = boostModelDetails.effectiveMinBoost;
+  const maxEligibleBoostPct = boostModelDetails.effectiveMaxBoost;
+  const isLinearRide = profile.rideMode === 'LINEAR';
 
-  // Calculate final boost and theoretical bounds.
-  const lockedBoostDetails = calculateFinalBoostDetails({
-    rideValue,
-    ticketStrength,
-    qualifyingSelections: qualifying.length,
-    combinedOdds,
-    hasRideEnded: false,
-    config: {
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-    },
-  });
+  let lockedBoostPct: number;
+  let maxPossibleBoostPct: number;
+  let rideValueForSnapshot: number;
+  let maxRideValueForSnapshot: number;
+  let ridePath: RidePathPoint[];
 
-  const maxBoostDetails = calculateFinalBoostDetails({
-    rideValue: maxRideValue,
-    ticketStrength,
-    qualifyingSelections: qualifying.length,
-    combinedOdds,
-    hasRideEnded: false,
-    config: {
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-    },
-  });
+  if (isLinearRide) {
+    lockedBoostPct = calculateLinearBoostPctAtElapsed(
+      elapsedPct,
+      crashPct,
+      effectiveMinBoostPct,
+      maxEligibleBoostPct
+    );
+    maxPossibleBoostPct = maxEligibleBoostPct;
+    rideValueForSnapshot = lockedBoostPct;
+    maxRideValueForSnapshot = maxEligibleBoostPct;
+    ridePath = buildLinearEffectiveRidePath(
+      60,
+      crashPct,
+      effectiveMinBoostPct,
+      maxEligibleBoostPct
+    );
+  } else {
+    // Get ride checkpoints and current value
+    const checkpoints = await rideDefinitionRepository.findByRewardId(rewardId);
+    const maxRideValue = getMaxRideValue(checkpoints, crashPct);
+    const rideValue = interpolateRideValue(
+      checkpoints.map((cp) => ({
+        index: cp.checkpointIndex,
+        timeOffsetPct: cp.timeOffsetPct,
+        baseBoostValue: cp.baseBoostValue,
+      })),
+      elapsedPct
+    );
 
-  const lockedBoostPct = lockedBoostDetails.finalBoostPct;
-  const maxPossibleBoostPct = maxBoostDetails.finalBoostPct;
-  const maxEligibleBoostPct = lockedBoostDetails.effectiveMaxBoost;
-  const effectiveMinBoostPct = lockedBoostDetails.minBoost;
-  const boostModel = lockedBoostDetails.boostModel;
+    ridePath = buildEffectiveRidePath(
+      checkpoints,
+      60,
+      crashPct,
+      ticketStrength,
+      finalBoostConfig,
+      qualifying.length,
+      combinedOdds
+    );
+
+    const lockedBoostDetails = calculateFinalBoostDetails({
+      rideValue,
+      ticketStrength,
+      qualifyingSelections: qualifying.length,
+      combinedOdds,
+      hasRideEnded: false,
+      config: finalBoostConfig,
+    });
+
+    const maxBoostDetails = calculateFinalBoostDetails({
+      rideValue: maxRideValue,
+      ticketStrength,
+      qualifyingSelections: qualifying.length,
+      combinedOdds,
+      hasRideEnded: false,
+      config: finalBoostConfig,
+    });
+
+    lockedBoostPct = lockedBoostDetails.finalBoostPct;
+    maxPossibleBoostPct = maxBoostDetails.finalBoostPct;
+    rideValueForSnapshot = rideValue;
+    maxRideValueForSnapshot = maxRideValue;
+  }
 
   if (elapsedPct >= crashPct) {
     return {
@@ -304,6 +341,7 @@ export async function lockBoost(
       selections: qualifying,
       disqualifiedSelections: disqualified,
       profileId: profile.id,
+      rideMode: profile.rideMode,
       minSelections: profile.minSelections,
       minCombinedOdds: profile.minCombinedOdds,
       minSelectionOdds: profile.minSelectionOdds,
@@ -311,6 +349,9 @@ export async function lockBoost(
       maxBoostPct: profile.maxBoostPct,
       maxBoostMinSelections: profile.maxBoostMinSelections,
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+      effectiveMinFloorRate: profile.effectiveMinFloorRate,
       rideDurationSeconds,
       checkpointCount,
       volatility,
@@ -320,8 +361,8 @@ export async function lockBoost(
       qualifyingSelectionCount: qualifying.length,
       combinedOdds,
       ticketStrength,
-      rideValue,
-      maxRideValue,
+      rideValue: rideValueForSnapshot,
+      maxRideValue: maxRideValueForSnapshot,
       elapsedPct,
       effectiveMinBoostPct,
       maxEligibleBoostPct,
@@ -355,19 +396,23 @@ export async function lockBoost(
       combinedOdds,
       ticketStrength,
       elapsedPct,
-      maxRideValue,
+      maxRideValue: maxRideValueForSnapshot,
       maxEligibleBoostPct,
       maxPossibleBoostPct,
       minBoostPct: profile.minBoostPct,
       maxBoostPct: profile.maxBoostPct,
       maxBoostMinSelections: profile.maxBoostMinSelections,
       maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+      effectiveMinFloorRate: profile.effectiveMinFloorRate,
       minSelections: profile.minSelections,
       minCombinedOdds: profile.minCombinedOdds,
       minSelectionOdds: profile.minSelectionOdds,
       checkpointCount,
       volatility,
       rideDurationSeconds,
+      rideMode: profile.rideMode,
       seed: reward.seed,
       crashPct,
     },
