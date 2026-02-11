@@ -31,8 +31,20 @@
       }
 
       header {
-        padding: 32px 40px 16px;
+        padding: 28px 40px 18px;
         border-bottom: 1px solid var(--border);
+      }
+
+      .header-row {
+        display: flex;
+        gap: 20px;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+
+      .header-copy {
+        flex: 1 1 480px;
+        min-width: 280px;
       }
 
       header h1 {
@@ -46,6 +58,35 @@
         color: var(--muted);
       }
 
+      .api-settings-inline {
+        flex: 0 1 620px;
+        min-width: 320px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: var(--shadow);
+      }
+
+      .api-settings-inline h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .api-settings-inline .grid {
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+      }
+
+      .api-settings-inline label {
+        font-size: 11px;
+        margin-bottom: 4px;
+      }
+
+      .api-settings-inline input {
+        padding: 8px 10px;
+      }
+
       main {
         padding: 24px 40px 60px;
         display: grid;
@@ -54,6 +95,19 @@
       }
 
       @media (max-width: 960px) {
+        header {
+          padding: 20px;
+        }
+
+        .header-row {
+          flex-direction: column;
+        }
+
+        .api-settings-inline {
+          width: 100%;
+          min-width: 0;
+        }
+
         main {
           grid-template-columns: 1fr;
           padding: 20px;
@@ -78,6 +132,27 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 12px;
+      }
+
+      .profile-groups {
+        display: grid;
+        gap: 14px;
+      }
+
+      .profile-group-title {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .profile-divider {
+        height: 1px;
+        border: 0;
+        background: var(--border);
+        margin: 2px 0 0;
       }
 
       label {
@@ -182,6 +257,24 @@
         padding: 10px;
       }
 
+      .ride-summary {
+        margin-bottom: 10px;
+      }
+
+      .ride-summary .status {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .ride-summary strong {
+        color: var(--ink);
+      }
+
+      .ride-outcome {
+        margin-top: 10px;
+      }
+
       svg {
         width: 100%;
         height: 220px;
@@ -190,13 +283,12 @@
   </head>
   <body>
     <header>
-      <h1>Combo Boost Rollercoaster Demo Console</h1>
-      <p>Local demo for testing eligibility, ride behavior, and lock outcomes.</p>
-    </header>
-
-    <main>
-      <div class="left">
-        <section>
+      <div class="header-row">
+        <div class="header-copy">
+          <h1>Combo Boost Rollercoaster Demo Console</h1>
+          <p>Local demo for testing eligibility, ride behavior, and lock outcomes.</p>
+        </div>
+        <div class="api-settings-inline">
           <h2>API Settings</h2>
           <div class="grid">
             <div>
@@ -208,61 +300,82 @@
               <input id="apiKey" placeholder="dev-secret-key" value="dev-secret-key" />
             </div>
           </div>
-        </section>
+        </div>
+      </div>
+    </header>
 
+    <main>
+      <div class="left">
         <section>
           <h2>Profile</h2>
-          <div class="grid">
+          <div class="profile-groups">
             <div>
-              <label>Name</label>
-              <input id="profileName" value="Demo Profile" />
+              <h3 class="profile-group-title">Eligibility Rules</h3>
+              <div class="grid">
+                <div>
+                  <label>Name</label>
+                  <input id="profileName" value="Demo Profile" />
+                </div>
+                <div>
+                  <label>Min selections</label>
+                  <input id="minSelections" type="number" value="5" />
+                </div>
+                <div>
+                  <label>Min combined odds</label>
+                  <input id="minCombinedOdds" type="number" step="0.01" value="10" />
+                </div>
+                <div>
+                  <label>Min selection odds</label>
+                  <input id="minSelectionOdds" type="number" step="0.01" value="1.3" />
+                </div>
+              </div>
             </div>
+            <hr class="profile-divider" />
             <div>
-              <label>Min selections</label>
-              <input id="minSelections" type="number" value="5" />
+              <h3 class="profile-group-title">Boost Caps and Max Access</h3>
+              <div class="grid">
+                <div>
+                  <label>Min boost %</label>
+                  <input id="minBoostPct" type="number" step="0.01" value="0.05" />
+                </div>
+                <div>
+                  <label>Max boost %</label>
+                  <input id="maxBoostPct" type="number" step="0.01" value="1.0" />
+                </div>
+                <div>
+                  <label>Max-boost min selections (optional)</label>
+                  <input id="maxBoostMinSelections" type="number" value="10" />
+                </div>
+                <div>
+                  <label>Max-boost min combined odds (optional)</label>
+                  <input id="maxBoostMinCombinedOdds" type="number" step="0.01" value="50" />
+                </div>
+              </div>
             </div>
+            <hr class="profile-divider" />
             <div>
-              <label>Min combined odds</label>
-              <input id="minCombinedOdds" type="number" step="0.01" value="10" />
-            </div>
-            <div>
-              <label>Min selection odds</label>
-              <input id="minSelectionOdds" type="number" step="0.01" value="1.3" />
-            </div>
-            <div>
-              <label>Min boost %</label>
-              <input id="minBoostPct" type="number" step="0.01" value="0.05" />
-            </div>
-            <div>
-              <label>Max boost %</label>
-              <input id="maxBoostPct" type="number" step="0.01" value="1.0" />
-            </div>
-            <div>
-              <label>Max-boost min selections (optional)</label>
-              <input id="maxBoostMinSelections" type="number" value="10" />
-            </div>
-            <div>
-              <label>Max-boost min combined odds (optional)</label>
-              <input id="maxBoostMinCombinedOdds" type="number" step="0.01" value="50" />
-            </div>
-            <div>
-              <label>Selection weight</label>
-              <input id="maxEligibilitySelectionWeight" type="number" step="0.01" value="0.75" />
-            </div>
-            <div>
-              <label>Odds weight</label>
-              <input id="maxEligibilityOddsWeight" type="number" step="0.01" value="0.25" />
-            </div>
-            <div>
-              <label>Floor rate</label>
-              <input id="effectiveMinFloorRate" type="number" step="0.01" value="0.35" />
-            </div>
-            <div>
-              <label>Ride mode</label>
-              <select id="rideMode">
-                <option value="WAVES">WAVES</option>
-                <option value="LINEAR">LINEAR</option>
-              </select>
+              <h3 class="profile-group-title">Model Tuning</h3>
+              <div class="grid">
+                <div>
+                  <label>Selection weight</label>
+                  <input id="maxEligibilitySelectionWeight" type="number" step="0.01" value="0.75" />
+                </div>
+                <div>
+                  <label>Odds weight</label>
+                  <input id="maxEligibilityOddsWeight" type="number" step="0.01" value="0.25" />
+                </div>
+                <div>
+                  <label>Floor rate</label>
+                  <input id="effectiveMinFloorRate" type="number" step="0.01" value="0.35" />
+                </div>
+                <div>
+                  <label>Ride mode</label>
+                  <select id="rideMode">
+                    <option value="WAVES">WAVES</option>
+                    <option value="LINEAR">LINEAR</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
           <div class="actions" style="margin-top: 12px;">
@@ -300,19 +413,6 @@
           </div>
         </section>
 
-        <section>
-          <h2>Ride Controls</h2>
-          <div class="actions">
-            <button id="startRide">Start Ride (Opt-in)</button>
-            <button class="secondary" id="quoteOnce">Get Quote</button>
-            <button class="ghost" id="toggleAutoQuote">Auto Quote (OFF)</button>
-            <button class="danger" id="lockBoost">Stop Ride (Lock)</button>
-          </div>
-          <div class="meta" style="margin-top: 10px;">
-            <span class="status">Elapsed: <span id="elapsedSeconds">0.0</span>s</span>
-            <span class="status">Auto quote: <span id="autoQuoteStatus">OFF</span></span>
-          </div>
-        </section>
       </div>
 
       <div class="right">
@@ -354,13 +454,35 @@
           </div>
         </section>
         <section>
+          <h2>Ride Controls</h2>
+          <div class="actions">
+            <button id="startRide">Start Ride (Opt-in)</button>
+            <button class="secondary" id="quoteOnce">Get Quote</button>
+            <button class="ghost" id="toggleAutoQuote">Auto Quote (ON)</button>
+            <button class="danger" id="lockBoost">Stop Ride (Lock)</button>
+          </div>
+          <div class="meta" style="margin-top: 10px;">
+            <span class="status">Elapsed: <span id="elapsedSeconds">0.0</span>s</span>
+            <span class="status">Auto quote: <span id="autoQuoteStatus">ON</span></span>
+          </div>
+        </section>
+        <section>
           <h2>Ride Path (effective)</h2>
+          <div class="ride-summary">
+            <span class="status">Current boost: <strong id="rideCurrentBoost">n/a</strong></span>
+          </div>
           <div class="chart">
             <svg id="rideChart" viewBox="0 0 600 220" preserveAspectRatio="none">
               <polyline id="ridePathLine" fill="none" stroke="#0f6b5f" stroke-width="3" points=""></polyline>
               <circle id="crashMarker" r="5" fill="#b34b3e" stroke="#ffffff" stroke-width="2" style="display: none;"></circle>
               <circle id="stopMarker" r="5" fill="#15803d" stroke="#ffffff" stroke-width="2" style="display: none;"></circle>
             </svg>
+          </div>
+          <div class="ride-outcome" id="rideOutcomeBox" style="display: none;">
+            <div class="meta">
+              <span class="status"><span id="rideFinalLabel">Final boost</span>: <span id="rideFinalBoost">n/a</span></span>
+              <span class="status">Max boost: <span id="rideFinalMaxBoost">n/a</span></span>
+            </div>
           </div>
         </section>
         <section>
@@ -372,7 +494,7 @@
 
     <script>
       const state = {
-        autoQuote: false,
+        autoQuote: true,
         autoQuoteTimer: null,
         rideStart: null,
         rideRunning: false,
@@ -384,6 +506,11 @@
       const ridePathLine = document.getElementById('ridePathLine');
       const crashMarker = document.getElementById('crashMarker');
       const stopMarker = document.getElementById('stopMarker');
+      const rideCurrentBoost = document.getElementById('rideCurrentBoost');
+      const rideOutcomeBox = document.getElementById('rideOutcomeBox');
+      const rideFinalLabel = document.getElementById('rideFinalLabel');
+      const rideFinalBoost = document.getElementById('rideFinalBoost');
+      const rideFinalMaxBoost = document.getElementById('rideFinalMaxBoost');
       const elapsedSeconds = document.getElementById('elapsedSeconds');
       const autoQuoteStatus = document.getElementById('autoQuoteStatus');
 
@@ -399,6 +526,7 @@
       function setResponse(payload) {
         responseBox.textContent = JSON.stringify(payload, null, 2);
         updateModelPanel(payload);
+        updateRideBoostPanel(payload);
         const chartData = extractChartData(payload);
         if (chartData.ridePath) {
           renderRidePath(chartData.ridePath, {
@@ -409,6 +537,50 @@
           hideMarker(crashMarker);
           hideMarker(stopMarker);
         }
+      }
+
+      function updateRideBoostPanel(payload) {
+        const details = payload && payload.details ? payload.details : payload;
+        const reasonCode = typeof details?.reason_code === 'string'
+          ? details.reason_code
+          : (typeof details?.code === 'string' ? details.code : null);
+
+        const currentBoostPct = toFiniteNumber(details?.current_boost_pct);
+        const lockedBoostPct = toFiniteNumber(details?.locked_boost_pct);
+        const theoreticalMaxBoostPct = toFiniteNumber(details?.theoretical_max_boost_pct);
+
+        rideCurrentBoost.textContent = currentBoostPct === null
+          ? 'n/a'
+          : formatPercent(currentBoostPct, 2);
+
+        let finalLabel = null;
+        let finalBoostPct = null;
+
+        if (lockedBoostPct !== null) {
+          finalLabel = 'Locked boost';
+          finalBoostPct = lockedBoostPct;
+        } else if (reasonCode === 'RIDE_CRASHED') {
+          finalLabel = 'Crashed boost';
+          finalBoostPct = currentBoostPct ?? 0;
+        } else if (reasonCode === 'RIDE_ENDED') {
+          finalLabel = 'Ended boost';
+          finalBoostPct = currentBoostPct ?? 0;
+        }
+
+        if (finalLabel) {
+          rideOutcomeBox.style.display = 'block';
+          rideFinalLabel.textContent = finalLabel;
+          rideFinalBoost.textContent = formatPercent(finalBoostPct ?? 0, 2);
+          rideFinalMaxBoost.textContent = theoreticalMaxBoostPct === null
+            ? 'n/a'
+            : formatPercent(theoreticalMaxBoostPct, 2);
+          return;
+        }
+
+        rideOutcomeBox.style.display = 'none';
+        rideFinalLabel.textContent = 'Final boost';
+        rideFinalBoost.textContent = 'n/a';
+        rideFinalMaxBoost.textContent = 'n/a';
       }
 
       function updateModelPanel(payload) {
@@ -644,6 +816,11 @@
         return `${(Number(value) * 100).toFixed(digits)}%`;
       }
 
+      function toFiniteNumber(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      }
+
       function updateElapsed() {
         if (!state.rideStart) {
           elapsedSeconds.textContent = '0.0';
@@ -687,13 +864,18 @@
         autoQuoteStatus.textContent = state.autoQuote ? 'ON' : 'OFF';
         document.getElementById('toggleAutoQuote').textContent = `Auto Quote (${state.autoQuote ? 'ON' : 'OFF'})`;
 
-        if (state.autoQuote) {
-          state.autoQuoteTimer = setInterval(() => {
-            document.getElementById('quoteOnce').click();
-          }, 200);
-        } else if (state.autoQuoteTimer) {
+        if (state.autoQuoteTimer) {
           clearInterval(state.autoQuoteTimer);
           state.autoQuoteTimer = null;
+        }
+
+        if (state.autoQuote) {
+          state.autoQuoteTimer = setInterval(() => {
+            if (!state.rideRunning) {
+              return;
+            }
+            document.getElementById('quoteOnce').click();
+          }, 200);
         }
       }
 
@@ -741,7 +923,7 @@
           setText('rewardId', data.id);
           document.getElementById('betId').value = generateBetId();
           resetElapsedTimer();
-          setAutoQuote(false);
+          setAutoQuote(true);
           setResponse(data);
         } catch (err) {
           setResponse(err.payload || { error: err.message });
@@ -828,6 +1010,9 @@
           setResponse(err.payload || { error: err.message });
         }
       });
+
+      // Default to auto-quote ON; polling only runs while ride is active.
+      setAutoQuote(true);
 
     </script>
   </body>
