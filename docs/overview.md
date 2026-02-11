@@ -1,78 +1,87 @@
 # Combo Boost Rollercoaster - Business Overview
 
-## What it is
-Combo Boost Rollercoaster is a short-form loyalty mechanic for sportsbook combo/parlay bettors.
-Eligible users receive a reward token, place a qualifying bet, and then start a short "rollercoaster"
-ride that can crash at any moment. If they stop the ride in time, a dynamic boost is locked and paid
-on winning tickets only. Stake and odds are never modified.
+## What this product does
+Combo Boost Rollercoaster is a short, post-bet loyalty experience for combo/parlay bettors.
+The bettor places a qualifying combo first, then starts a live boost ride. The boost moves in
+real time and can crash at any moment. If the bettor stops in time, the boost is locked.
 
-## Why it works
-- Creates urgency: the boost changes in real time and can crash without warning.
-- Rewards strong tickets: more qualifying selections and higher combined odds yield better boosts.
-- Ticket strength prioritizes margin multiplication: 75% weight on selection count, 25% on combined odds.
-- Stronger tickets are more likely to open on an upswing.
-- Ride generation avoids instant "best-at-start" outcomes by keeping the first theoretical peak at least 2 seconds in.
-- Low operational risk: boosts are capped and apply only to winnings.
+Important: stake and sportsbook odds never change. The reward only adds bonus payout on wins.
 
-## Business value
-- Increases parlay adoption by making the combo bet more exciting and rewarding.
-- Drives higher stake and higher odds combos without changing base odds.
-- Creates a repeatable daily/weekly engagement moment without long promo cycles.
-- Adds a "post-bet moment" that keeps users engaged after bet placement.
-- Generates shareable moments (ride path can be used in UI animation and social).
+## Core customer flow
+1) User receives a reward token.
+2) User places a qualifying combo bet.
+3) User starts the ride (opt-in).
+4) Boost moves live with no countdown/ETA shown.
+5) User chooses when to stop and lock the current boost.
+6) On win: bonus payout = winnings x locked boost.
+7) On loss, crash, or ride end: bonus payout = 0.
 
-## Who it is for
-- Operators who want a simple loyalty mechanic that does not touch sportsbook pricing.
-- Bettors who like quick, high-tension moments and optional upside on winnings.
+## Latest functionality in this version
+- Precheck eligibility endpoint lets operators validate the ticket before ride start to avoid bad UX.
+- Selection-level exclusion is supported (`eligible=false`, optional `ineligible_reason`) for cases like boosted odds or zero-margin markets.
+- Two ride modes are available per profile:
+  - `WAVES`: multi-peak dynamic ride.
+  - `LINEAR`: straight climb from effective min boost to effective max boost.
+- Max boost accessibility is tunable with optional thresholds:
+  - `max_boost_min_selections`
+  - `max_boost_min_combined_odds`
+- Boost model tuning is profile-configurable:
+  - `max_eligibility_selection_weight` (default 0.75)
+  - `max_eligibility_odds_weight` (default 0.25)
+  - `effective_min_floor_rate` (default 0.35)
+- Ride outputs include data for UI and analytics:
+  - current boost
+  - theoretical max boost
+  - ride crash/end offsets
+  - effective ride path (for visual animation and post-bet storytelling)
 
-## How money is made
-- More and better combo bets (higher odds, more legs) can increase handle.
-- The boost is paid only on wins, so payouts are bounded and predictable.
-- Caps and eligibility rules keep the offer profitable and controllable.
+## Why operators use it
+- Adds a high-intensity moment after bet placement without changing core sportsbook pricing.
+- Encourages stronger combos (more qualifying legs and higher qualifying odds).
+- Keeps payout risk controllable through min/max boost caps and max-eligibility thresholds.
+- Supports CRM-style token campaigns (daily/weekly) with clear single-use behavior.
 
-## Core customer experience
-1) User receives a reward token
-2) User places a qualifying combo bet
-3) User opts in to start the ride
-4) Boost changes in real time (no countdown shown)
-5) User locks the boost by stopping the ride
-6) Bonus payout = winnings × locked boost
-7) If the ride crashes or ends, no bonus is paid
+## Why bettors engage
+- Live movement creates urgency and FOMO.
+- Outcome feels interactive (user chooses when to stop).
+- No downside to stake or odds, only upside on a winning ticket.
+- Ride path can be visualized in client UI for stronger game feel.
 
-## Operator controls
-Operators configure:
-- Minimum selections
-- Minimum combined odds
-- Minimum odds per selection
-- Min/max boost limits
-- Optional thresholds for when max boost becomes reachable (by selections and combined odds)
-- Eligibility and access rules
+## Operator controls (business levers)
+Operators can configure:
+- Eligibility thresholds:
+  - minimum qualifying selections
+  - minimum qualifying combined odds
+  - minimum odds per selection
+- Boost economics:
+  - min boost
+  - max boost
+  - optional max-boost thresholds by selections and odds
+- Boost model behavior:
+  - selection/odds weighting
+  - effective minimum floor rate
+- Ride mode:
+  - WAVES or LINEAR
 
-Ride timing, volatility, and crash behavior are internal to preserve unpredictability.
+Internal ride generation remains deterministic and auditable, but not predictable to bettors.
 
-## Key safeguards
-- Boost only applies to winnings (no downside risk for bettors).
-- Strict min/max caps enforce budget control.
-- Optional max-boost thresholds let operators decide how hard it is to reach the top boost.
-- Deterministic ride logic supports audits and dispute resolution.
-- Single-use token behavior prevents repeat claims on the same reward.
+## Risk controls and safeguards
+- Bonus applies only to winnings; bettors never lose extra stake through this feature.
+- Single-use token behavior prevents repeat claiming of the same reward.
+- Lock and settlement are idempotent for safe sportsbook integration.
+- Deterministic seeded ride generation supports full replay and dispute handling.
+- HMAC authentication is supported for monetary endpoints.
 
-## Suggested KPIs
-- Opt-in rate (token -> ride start)
-- Lock rate (ride start -> lock)
-- Average locked boost by segment
-- Incremental combo handle vs control group
-- Payout rate (bonus paid / bonus locked)
+## Measurement framework (recommended KPIs)
+- Token -> precheck pass rate
+- Token -> ride start rate (opt-in)
+- Ride start -> lock rate
+- Average locked boost by segment/profile
+- Crash vs lock distribution
+- Incremental combo handle vs control
+- Bonus payout rate (bonus paid / bonus locked)
 
-## Trust and auditability
-Every boost decision is deterministic and auditable. The system stores:
-- Qualifying selections and odds
-- Ticket strength
-- Ride curve checkpoints and crash point
-- Locked boost value and timestamp
-- Full decision snapshot for audits and support
-
-## Example outcome
-Stake $20 at 5.00 odds = $100 winnings  
-Locked boost 17.5% → payout becomes $117.50  
-If the bet loses → bonus is $0
+## Example payout
+Stake $20 at 5.00 odds = $100 winnings
+Locked boost 17.5% -> total payout on win = $117.50
+If the bet loses -> bonus payout = $0
