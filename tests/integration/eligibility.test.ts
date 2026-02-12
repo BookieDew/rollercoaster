@@ -288,6 +288,53 @@ describe('Eligibility Integration Tests', () => {
       expect(quoteRes.body.eligible).toBe(false);
       expect(quoteRes.body.reason_code).toBe(ReasonCode.REWARD_ALREADY_USED);
     });
+
+    it('should return RIDE_ENDED when ride reaches end without pre-end crash', async () => {
+      // This seed deterministically takes the "no pre-end crash" path in deriveCrashPct.
+      await db('user_rewards')
+        .where({ id: rewardId })
+        .update({ seed: 'ride-ended-seed-20' });
+
+      await request(app)
+        .post(`/api/rewards/${rewardId}/opt-in`)
+        .set('X-API-Key', API_KEY)
+        .send({
+          user_id: 'eligibility-user',
+          bet_id: 'ride-ended-bet',
+          ticket: {
+            selections: [
+              { id: 's1', odds: 2.0 },
+              { id: 's2', odds: 2.0 },
+              { id: 's3', odds: 2.0 },
+            ],
+          },
+        });
+
+      const now = Date.now();
+      await db('user_rewards')
+        .where({ id: rewardId })
+        .update({
+          start_time: new Date(now - 12000).toISOString(),
+          end_time: new Date(now - 1000).toISOString(),
+        });
+
+      const quoteRes = await request(app)
+        .post('/api/boost/quote')
+        .set('X-API-Key', API_KEY)
+        .send({
+          user_id: 'eligibility-user',
+          reward_id: rewardId,
+          bet_id: 'ride-ended-bet',
+        });
+
+      expect(quoteRes.status).toBe(200);
+      expect(quoteRes.body.eligible).toBe(false);
+      expect(quoteRes.body.reason_code).toBe(ReasonCode.RIDE_ENDED);
+      expect(quoteRes.body.current_boost_pct).toBe(0);
+      expect(quoteRes.body.theoretical_max_boost_pct).toBeGreaterThan(0);
+      expect(quoteRes.body.ride_end_at_offset_seconds).toBeGreaterThan(0);
+      expect(Array.isArray(quoteRes.body.ride_path)).toBe(true);
+    });
   });
 
   describe('Successful eligibility', () => {

@@ -51,6 +51,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - `src/services/boostQuoteService.ts` (dynamic quote)
 - `src/services/boostLockService.ts` (lock + snapshot)
 - `src/services/settlementService.ts` (bonus settlement)
+- `src/middleware/authMiddleware.ts` (API key + HMAC auth, admin endpoint gate)
 
 ## Profile model (operator-tunable)
 - Eligibility: `min_selections`, `min_combined_odds`, `min_selection_odds`

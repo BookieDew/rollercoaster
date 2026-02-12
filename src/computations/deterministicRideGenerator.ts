@@ -49,10 +49,13 @@ const CRASH_PHASE_WEIGHTS = {
   DOWN: 0.30,
 } as const;
 
+const NO_CRASH_END_WEIGHT = 0.08;
+
 export function getCrashBiasConfig(): {
   timeBucketWeights: { early: number; mid: number; late: number };
   timeBucketRanges: { earlyEndPct: number; midEndPct: number };
   phaseWeights: { up: number; peak: number; down: number };
+  noCrashEndWeight: number;
 } {
   return {
     timeBucketWeights: {
@@ -69,6 +72,7 @@ export function getCrashBiasConfig(): {
       peak: CRASH_PHASE_WEIGHTS.PEAK,
       down: CRASH_PHASE_WEIGHTS.DOWN,
     },
+    noCrashEndWeight: NO_CRASH_END_WEIGHT,
   };
 }
 
@@ -161,6 +165,11 @@ export function deriveCrashPct(
   }
 
   const minCrash = Math.max(0, Math.min(minCrashSeconds, durationSeconds));
+  const noCrashRng = new SeededRandom(`no-crash:${seed}`);
+  if (noCrashRng.next() < NO_CRASH_END_WEIGHT) {
+    return 1;
+  }
+
   const rng = new SeededRandom(`crash:${seed}`);
   const crashSeconds = sampleCrashSecondsFromBuckets(
     rng,
@@ -168,7 +177,7 @@ export function deriveCrashPct(
     durationSeconds
   );
   const crashPct = crashSeconds / durationSeconds;
-  return roundToDecimals(clampValue(crashPct, 0.01, 0.99), 4);
+  return roundToDecimals(clampValue(crashPct, 0.01, 0.9999), 4);
 }
 
 export function deriveCrashPhase(seed: string): CrashPhase {
@@ -284,7 +293,7 @@ export function generateRide(seed: string, config: RideConfig): GeneratedRide {
   );
   const startingFloorValue = checkpoints[0].baseBoostValue;
 
-  const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 0.99);
+  const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 1);
   const crashPhase = deriveCrashPhase(seed);
   if (rideMode === 'LINEAR') {
     generateLinearCheckpointValues(checkpoints, {
@@ -753,7 +762,7 @@ function enforcePeakDelayWithoutFlattening(
   }
 
   const minPeakDelayPct = options.minPeakDelaySeconds / options.durationSeconds;
-  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 0.99);
+  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 1);
   if (minPeakDelayPct <= 0 || minPeakDelayPct >= effectiveCrashPct) {
     return;
   }
@@ -971,55 +980,6 @@ function roundToDecimals(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
-function normalSample(rng: SeededRandom, mean: number, stdDev: number): number {
-  // Box-Muller transform
-  let u = 0;
-  let v = 0;
-  while (u === 0) u = rng.next();
-  while (v === 0) v = rng.next();
-  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-  return mean + z * stdDev;
-}
-
-function gammaSample(rng: SeededRandom, shape: number): number {
-  if (shape <= 0) {
-    return 0;
-  }
-
-  if (shape < 1) {
-    // Use boost: Gamma(k) = Gamma(k+1) * U^(1/k)
-    const u = rng.next();
-    return gammaSample(rng, shape + 1) * Math.pow(u, 1 / shape);
-  }
-
-  // Marsaglia and Tsang method for shape >= 1
-  const d = shape - 1 / 3;
-  const c = 1 / Math.sqrt(9 * d);
-
-  while (true) {
-    const x = normalSample(rng, 0, 1);
-    const v = 1 + c * x;
-    if (v <= 0) continue;
-    const v3 = v * v * v;
-    const u = rng.next();
-    if (u < 1 - 0.0331 * x * x * x * x) {
-      return d * v3;
-    }
-    if (Math.log(u) < 0.5 * x * x + d * (1 - v3 + Math.log(v3))) {
-      return d * v3;
-    }
-  }
-}
-
-function betaSample(rng: SeededRandom, alpha: number, beta: number): number {
-  const x = gammaSample(rng, alpha);
-  const y = gammaSample(rng, beta);
-  if (x + y === 0) {
-    return 0.5;
-  }
-  return x / (x + y);
-}
-
 function clampValue(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -1072,154 +1032,11 @@ function applyStartDirectionBias(
   checkpoints[1].baseBoostValue = roundToDecimals(newSecond, 6);
 }
 
-interface PeakDelayOptions {
-  minBoostPct: number;
-  maxBoostPct: number;
-  durationSeconds?: number;
-  crashPct?: number;
-  minPeakDelaySeconds: number;
-  seed?: string;
-}
-
-function enforceMinPeakDelay(
-  checkpoints: RideCheckpoint[],
-  options: PeakDelayOptions
-): void {
-  if (checkpoints.length < 2 || !options.durationSeconds || options.durationSeconds <= 0) {
-    return;
-  }
-
-  if (options.minPeakDelaySeconds <= 0) {
-    return;
-  }
-
-  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 0.99);
-  const earliestPeakPct = options.minPeakDelaySeconds / options.durationSeconds;
-
-  if (earliestPeakPct <= 0 || earliestPeakPct >= effectiveCrashPct) {
-    return;
-  }
-
-  const earlyIndexes: number[] = [];
-  const postIndexes: number[] = [];
-
-  for (let i = 0; i < checkpoints.length; i++) {
-    const timePct = checkpoints[i].timeOffsetPct;
-    if (timePct >= effectiveCrashPct) {
-      break;
-    }
-    if (timePct < earliestPeakPct) {
-      earlyIndexes.push(i);
-      continue;
-    }
-    postIndexes.push(i);
-  }
-
-  if (postIndexes.length === 0 || earlyIndexes.length === 0) {
-    return;
-  }
-
-  const epsilon = Math.max((options.maxBoostPct - options.minBoostPct) * 0.005, 0.000001);
-
-  let earlyMax = Number.NEGATIVE_INFINITY;
-  for (const index of earlyIndexes) {
-    earlyMax = Math.max(earlyMax, checkpoints[index].baseBoostValue);
-  }
-
-  let postPeakIndex = postIndexes[0];
-  let postMax = checkpoints[postPeakIndex].baseBoostValue;
-  for (const index of postIndexes) {
-    if (checkpoints[index].baseBoostValue > postMax) {
-      postMax = checkpoints[index].baseBoostValue;
-      postPeakIndex = index;
-    }
-  }
-
-  if (postIndexes.length > 1 && options.seed) {
-    const peakRng = new SeededRandom(`peak-anchor:${options.seed}`);
-    const targetPeakPct = earliestPeakPct + ((effectiveCrashPct - earliestPeakPct) * (0.2 + peakRng.next() * 0.75));
-    let anchoredPeakIndex = postIndexes[0];
-    let closestDistance = Math.abs(checkpoints[anchoredPeakIndex].timeOffsetPct - targetPeakPct);
-
-    for (const index of postIndexes) {
-      const distance = Math.abs(checkpoints[index].timeOffsetPct - targetPeakPct);
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        anchoredPeakIndex = index;
-      }
-    }
-
-    const bump = Math.max((options.maxBoostPct - options.minBoostPct) * (0.01 + (peakRng.next() * 0.04)), epsilon);
-    const anchoredValue = clampValue(
-      Math.max(
-        checkpoints[anchoredPeakIndex].baseBoostValue,
-        postMax + bump,
-        earlyMax + epsilon
-      ),
-      options.minBoostPct,
-      options.maxBoostPct
-    );
-    checkpoints[anchoredPeakIndex].baseBoostValue = roundToDecimals(anchoredValue, 6);
-    postPeakIndex = anchoredPeakIndex;
-    postMax = checkpoints[postPeakIndex].baseBoostValue;
-  }
-
-  if (postMax <= earlyMax) {
-    const promoted = clampValue(
-      earlyMax + epsilon,
-      options.minBoostPct,
-      options.maxBoostPct
-    );
-    checkpoints[postPeakIndex].baseBoostValue = roundToDecimals(promoted, 6);
-    postMax = checkpoints[postPeakIndex].baseBoostValue;
-  }
-
-  const earlyCap = postMax - epsilon;
-  for (const index of earlyIndexes) {
-    const capped = Math.min(checkpoints[index].baseBoostValue, earlyCap);
-    checkpoints[index].baseBoostValue = roundToDecimals(
-      clampValue(capped, options.minBoostPct, options.maxBoostPct),
-      6
-    );
-  }
-}
-
-interface DirectionRuleOptions {
-  minBoostPct: number;
-  maxBoostPct: number;
-  crashPct?: number;
-  targetPeakCount?: number;
-  minRunLength: number;
-}
-
-function enforceRideDirectionRules(
-  checkpoints: RideCheckpoint[],
-  options: DirectionRuleOptions
-): void {
-  if (checkpoints.length < 4 || options.minRunLength <= 1) {
-    return;
-  }
-
-  const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, options.crashPct);
-  if (preCrashLastIndex < 2) {
-    return;
-  }
-
-  const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
-  const threshold = Math.max(range * 0.0005, 0.000001);
-  const minStep = Math.max(range * 0.01, 0.00001);
-
-  enforceDirectionRunPass(checkpoints, preCrashLastIndex, threshold, minStep, options);
-  enforceSingleMaxPreCrash(checkpoints, preCrashLastIndex, minStep, threshold, options);
-  enforcePeakCount(checkpoints, preCrashLastIndex, threshold, options);
-  enforceDirectionRunPass(checkpoints, preCrashLastIndex, threshold, minStep, options);
-}
-
 function getPreCrashLastCheckpointIndex(
   checkpoints: RideCheckpoint[],
   crashPct?: number
 ): number {
-  const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 0.99);
+  const effectiveCrashPct = clampValue(crashPct ?? 1, 0.01, 1);
   let lastIndex = checkpoints.length - 2; // Keep final crash endpoint out.
 
   for (let i = 0; i < checkpoints.length; i++) {
@@ -1230,161 +1047,6 @@ function getPreCrashLastCheckpointIndex(
   }
 
   return Math.max(1, Math.min(lastIndex, checkpoints.length - 2));
-}
-
-function enforceDirectionRunPass(
-  checkpoints: RideCheckpoint[],
-  preCrashLastIndex: number,
-  threshold: number,
-  minStep: number,
-  options: DirectionRuleOptions
-): void {
-  let currentDirection = 0;
-  let runLength = 0;
-
-  for (let i = 1; i <= preCrashLastIndex; i++) {
-    const prev = checkpoints[i - 1].baseBoostValue;
-    const curr = checkpoints[i].baseBoostValue;
-    let direction = directionOf(curr - prev, threshold);
-
-    if (direction === 0) {
-      direction = currentDirection !== 0
-        ? currentDirection
-        : inferDirection(checkpoints, i, preCrashLastIndex, threshold);
-    }
-
-    if (currentDirection === 0) {
-      currentDirection = direction;
-      runLength = 1;
-    } else if (direction !== currentDirection) {
-      const remainingMoves = preCrashLastIndex - i + 1;
-      if (runLength < options.minRunLength || remainingMoves < options.minRunLength) {
-        direction = currentDirection;
-        runLength += 1;
-      } else {
-        currentDirection = direction;
-        runLength = 1;
-      }
-    } else {
-      runLength += 1;
-    }
-
-    const desiredDelta = Math.max(Math.abs(curr - prev), minStep);
-    let adjusted = clampValue(
-      prev + currentDirection * desiredDelta,
-      options.minBoostPct,
-      options.maxBoostPct
-    );
-
-    if (Math.abs(adjusted - prev) <= threshold) {
-      adjusted = clampValue(
-        prev + currentDirection * minStep,
-        options.minBoostPct,
-        options.maxBoostPct
-      );
-    }
-
-    checkpoints[i].baseBoostValue = roundToDecimals(adjusted, 6);
-  }
-}
-
-function enforceSingleMaxPreCrash(
-  checkpoints: RideCheckpoint[],
-  preCrashLastIndex: number,
-  minStep: number,
-  threshold: number,
-  options: DirectionRuleOptions
-): void {
-  let maxValue = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i <= preCrashLastIndex; i++) {
-    if (checkpoints[i].baseBoostValue > maxValue) {
-      maxValue = checkpoints[i].baseBoostValue;
-    }
-  }
-
-  let seenMax = false;
-  let duplicateCount = 0;
-  for (let i = 0; i <= preCrashLastIndex; i++) {
-    const value = checkpoints[i].baseBoostValue;
-    if (Math.abs(value - maxValue) > threshold) {
-      continue;
-    }
-
-    if (!seenMax) {
-      seenMax = true;
-      continue;
-    }
-
-    duplicateCount += 1;
-    const lowered = clampValue(
-      maxValue - (minStep * 0.5 * duplicateCount),
-      options.minBoostPct,
-      options.maxBoostPct
-    );
-    checkpoints[i].baseBoostValue = roundToDecimals(lowered, 6);
-  }
-}
-
-function enforcePeakCount(
-  checkpoints: RideCheckpoint[],
-  preCrashLastIndex: number,
-  threshold: number,
-  options: DirectionRuleOptions
-): void {
-  const targetPeakCount = Math.max(1, options.targetPeakCount ?? 4);
-  if (preCrashLastIndex < 3) {
-    return;
-  }
-
-  let peaks = getPeakIndexes(checkpoints, preCrashLastIndex, threshold);
-  let safety = 0;
-  while (peaks.length > targetPeakCount && safety < 200) {
-    safety += 1;
-    let weakestPeakIndex = peaks[0];
-    let weakestProminence = Number.POSITIVE_INFINITY;
-
-    for (const peakIndex of peaks) {
-      const prominence = checkpoints[peakIndex].baseBoostValue
-        - Math.max(
-            checkpoints[peakIndex - 1].baseBoostValue,
-            checkpoints[peakIndex + 1].baseBoostValue
-          );
-      if (prominence < weakestProminence) {
-        weakestProminence = prominence;
-        weakestPeakIndex = peakIndex;
-      }
-    }
-
-    smoothWindowAroundIndex(
-      checkpoints,
-      weakestPeakIndex,
-      1,
-      preCrashLastIndex
-    );
-
-    peaks = getPeakIndexes(checkpoints, preCrashLastIndex, threshold);
-  }
-}
-
-function getPeakIndexes(
-  checkpoints: RideCheckpoint[],
-  preCrashLastIndex: number,
-  threshold: number,
-  minTimePct = 0
-): number[] {
-  const peaks: number[] = [];
-  for (let i = 1; i < preCrashLastIndex; i++) {
-    if (checkpoints[i].timeOffsetPct < minTimePct) {
-      continue;
-    }
-    const prev = checkpoints[i - 1].baseBoostValue;
-    const current = checkpoints[i].baseBoostValue;
-    const next = checkpoints[i + 1].baseBoostValue;
-    if (current - prev > threshold && current - next > threshold) {
-      peaks.push(i);
-    }
-  }
-  return peaks;
 }
 
 function inferDirection(
@@ -1431,7 +1093,7 @@ function enforceInitialClimb(
     return;
   }
 
-  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 0.99);
+  const effectiveCrashPct = clampValue(options.crashPct ?? 1, 0.01, 1);
   const initialClimbPct = options.initialClimbSeconds / options.durationSeconds;
   const climbEndPct = Math.min(initialClimbPct, effectiveCrashPct - 0.000001);
   if (climbEndPct <= 0) {
@@ -1507,88 +1169,6 @@ function enforceInitialClimb(
     }
 
     checkpoints[boundaryIndex].baseBoostValue = roundToDecimals(boundaryTarget, 6);
-  }
-}
-
-interface FinalPeakCapOptions {
-  minBoostPct: number;
-  maxBoostPct: number;
-  crashPct?: number;
-  durationSeconds?: number;
-  initialClimbSeconds: number;
-  targetPeakCount: number;
-}
-
-function enforceFinalPeakCap(
-  checkpoints: RideCheckpoint[],
-  options: FinalPeakCapOptions
-): void {
-  if (checkpoints.length < 4) {
-    return;
-  }
-
-  const targetPeakCount = Math.max(1, options.targetPeakCount);
-  const preCrashLastIndex = getPreCrashLastCheckpointIndex(checkpoints, options.crashPct);
-  if (preCrashLastIndex < 3) {
-    return;
-  }
-
-  const range = Math.max(options.maxBoostPct - options.minBoostPct, 0);
-  const threshold = Math.max(range * 0.0005, 0.000001);
-  const minPeakPct = options.durationSeconds && options.durationSeconds > 0
-    ? (options.initialClimbSeconds / options.durationSeconds)
-    : 0;
-
-  let peaks = getPeakIndexes(checkpoints, preCrashLastIndex, threshold, minPeakPct);
-  let safety = 0;
-  while (peaks.length > targetPeakCount && safety < 200) {
-    safety += 1;
-    let weakestPeakIndex = peaks[0];
-    let weakestProminence = Number.POSITIVE_INFINITY;
-
-    for (const peakIndex of peaks) {
-      const prominence = checkpoints[peakIndex].baseBoostValue
-        - Math.max(
-            checkpoints[peakIndex - 1].baseBoostValue,
-            checkpoints[peakIndex + 1].baseBoostValue
-          );
-      if (prominence < weakestProminence) {
-        weakestProminence = prominence;
-        weakestPeakIndex = peakIndex;
-      }
-    }
-
-    smoothWindowAroundIndex(
-      checkpoints,
-      weakestPeakIndex,
-      1,
-      preCrashLastIndex
-    );
-
-    peaks = getPeakIndexes(checkpoints, preCrashLastIndex, threshold, minPeakPct);
-  }
-}
-
-function smoothWindowAroundIndex(
-  checkpoints: RideCheckpoint[],
-  centerIndex: number,
-  minIndex: number,
-  maxIndex: number
-): void {
-  const leftIndex = Math.max(minIndex, centerIndex - 2);
-  const rightIndex = Math.min(maxIndex, centerIndex + 2);
-  if (rightIndex - leftIndex < 2) {
-    return;
-  }
-
-  const leftValue = checkpoints[leftIndex].baseBoostValue;
-  const rightValue = checkpoints[rightIndex].baseBoostValue;
-  for (let i = leftIndex + 1; i < rightIndex; i++) {
-    const ratio = (i - leftIndex) / (rightIndex - leftIndex);
-    checkpoints[i].baseBoostValue = roundToDecimals(
-      leftValue + ((rightValue - leftValue) * ratio),
-      6
-    );
   }
 }
 

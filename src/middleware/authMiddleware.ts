@@ -5,6 +5,7 @@ import { config } from '../config';
 export interface AuthenticatedRequest extends Request {
   apiKeyId?: string;
   rawBody?: string;
+  authMethod?: 'api_key' | 'hmac';
 }
 
 const replayCache = new Map<string, number>();
@@ -51,6 +52,7 @@ export function authMiddleware(
   if (apiKey) {
     if (validateApiKey(apiKey)) {
       req.apiKeyId = apiKey.substring(0, 8); // First 8 chars as identifier
+      req.authMethod = 'api_key';
       return next();
     }
     res.status(401).json({
@@ -67,6 +69,7 @@ export function authMiddleware(
   if (signature && timestamp) {
     if (validateHmacSignature(req, signature, timestamp)) {
       req.apiKeyId = 'hmac';
+      req.authMethod = 'hmac';
       return next();
     }
     res.status(401).json({
@@ -88,17 +91,26 @@ export function authMiddleware(
  * In production, this would check against a database of valid keys.
  */
 function validateApiKey(apiKey: string): boolean {
-  // Simple validation: key must match the configured secret
-  // In production, you'd look up keys in a database
+  // Accept the standard API key and optional dedicated admin key.
   try {
-    const expectedKey = Buffer.from(config.api.keySecret);
-    const providedKey = Buffer.from(apiKey);
+    const candidates = [
+      config.api.keySecret,
+      config.api.adminKeySecret,
+    ];
 
-    if (expectedKey.length !== providedKey.length) {
-      return false;
+    for (const candidate of candidates) {
+      const expectedKey = Buffer.from(candidate);
+      const providedKey = Buffer.from(apiKey);
+
+      if (expectedKey.length !== providedKey.length) {
+        continue;
+      }
+
+      if (timingSafeEqual(expectedKey, providedKey)) {
+        return true;
+      }
     }
-
-    return timingSafeEqual(expectedKey, providedKey);
+    return false;
   } catch {
     return false;
   }
@@ -164,14 +176,32 @@ export function adminOnlyMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  // In production, check for admin-level API key or role
-  // For now, all authenticated requests are allowed
-  if (!req.apiKeyId) {
+  const apiKey = req.headers['x-api-key'] as string | undefined;
+  if (!apiKey) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: 'Admin API key required',
+    });
+    return;
+  }
+
+  try {
+    const provided = Buffer.from(apiKey);
+    const expected = Buffer.from(config.api.adminKeySecret);
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      res.status(403).json({
+        error: 'Forbidden',
+        message: 'Admin access required',
+      });
+      return;
+    }
+  } catch {
     res.status(403).json({
       error: 'Forbidden',
       message: 'Admin access required',
     });
     return;
   }
+
   next();
 }

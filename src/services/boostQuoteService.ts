@@ -277,7 +277,10 @@ export async function getQuote(
   }
 
   // Check if ride has crashed or ended
-  if (elapsedPct >= crashPct) {
+  const rideCrashed = elapsedPct >= crashPct && crashPct < 1;
+  const rideEnded = checkRideEnded(reward.startTime, reward.endTime);
+
+  if (rideCrashed) {
     return {
       success: true,
       data: buildRideEndedResponse(
@@ -296,7 +299,7 @@ export async function getQuote(
       ),
     };
   }
-  if (checkRideEnded(reward.startTime, reward.endTime)) {
+  if (rideEnded) {
     return {
       success: true,
       data: buildRideEndedResponse(

@@ -282,7 +282,10 @@ export async function lockBoost(
     maxRideValueForSnapshot = maxRideValue;
   }
 
-  if (elapsedPct >= crashPct) {
+  const rideCrashed = elapsedPct >= crashPct && crashPct < 1;
+  const rideEnded = checkRideEnded(reward.startTime, reward.endTime);
+
+  if (rideCrashed) {
     return {
       success: false,
       error: {
@@ -305,7 +308,7 @@ export async function lockBoost(
       },
     };
   }
-  if (checkRideEnded(reward.startTime, reward.endTime)) {
+  if (rideEnded) {
     return {
       success: false,
       error: {
@@ -330,55 +333,82 @@ export async function lockBoost(
   }
 
   // Create the lock record
-  const lock = await betBoostLockRepository.create({
-    betId,
-    rewardId,
-    lockedBoostPct,
-    qualifyingSelections: qualifying.length,
-    qualifyingOdds: combinedOdds,
-    ticketStrength,
-    snapshot: {
-      selections: qualifying,
-      disqualifiedSelections: disqualified,
-      profileId: profile.id,
-      rideMode: profile.rideMode,
-      minSelections: profile.minSelections,
-      minCombinedOdds: profile.minCombinedOdds,
-      minSelectionOdds: profile.minSelectionOdds,
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
-      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
-      effectiveMinFloorRate: profile.effectiveMinFloorRate,
-      rideDurationSeconds,
-      checkpointCount,
-      volatility,
-      seed: reward.seed,
-      crashPct,
-      totalSelectionCount: storedSelections.length,
-      qualifyingSelectionCount: qualifying.length,
-      combinedOdds,
+  let lock: BetBoostLock;
+  try {
+    lock = await betBoostLockRepository.create({
+      betId,
+      rewardId,
+      lockedBoostPct,
+      qualifyingSelections: qualifying.length,
+      qualifyingOdds: combinedOdds,
       ticketStrength,
-      rideValue: rideValueForSnapshot,
-      maxRideValue: maxRideValueForSnapshot,
-      elapsedPct,
-      effectiveMinBoostPct,
-      maxEligibleBoostPct,
-      maxPossibleBoostPct,
-      boostModel: {
-        selectionWeight: boostModel.selectionWeight,
-        oddsWeight: boostModel.oddsWeight,
-        maxEligibilityExponent: boostModel.maxEligibilityExponent,
-        effectiveMinFloorRate: boostModel.effectiveMinFloorRate,
-        selectionRatio: boostModel.selectionRatio,
-        oddsRatio: boostModel.oddsRatio,
-        eligibilityFactor: boostModel.eligibilityFactor,
+      snapshot: {
+        selections: qualifying,
+        disqualifiedSelections: disqualified,
+        profileId: profile.id,
+        rideMode: profile.rideMode,
+        minSelections: profile.minSelections,
+        minCombinedOdds: profile.minCombinedOdds,
+        minSelectionOdds: profile.minSelectionOdds,
+        minBoostPct: profile.minBoostPct,
+        maxBoostPct: profile.maxBoostPct,
+        maxBoostMinSelections: profile.maxBoostMinSelections,
+        maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+        maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+        maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+        effectiveMinFloorRate: profile.effectiveMinFloorRate,
+        rideDurationSeconds,
+        checkpointCount,
+        volatility,
+        seed: reward.seed,
+        crashPct,
+        totalSelectionCount: storedSelections.length,
+        qualifyingSelectionCount: qualifying.length,
+        combinedOdds,
+        ticketStrength,
+        rideValue: rideValueForSnapshot,
+        maxRideValue: maxRideValueForSnapshot,
+        elapsedPct,
+        effectiveMinBoostPct,
+        maxEligibleBoostPct,
+        maxPossibleBoostPct,
+        boostModel: {
+          selectionWeight: boostModel.selectionWeight,
+          oddsWeight: boostModel.oddsWeight,
+          maxEligibilityExponent: boostModel.maxEligibilityExponent,
+          effectiveMinFloorRate: boostModel.effectiveMinFloorRate,
+          selectionRatio: boostModel.selectionRatio,
+          oddsRatio: boostModel.oddsRatio,
+          eligibilityFactor: boostModel.eligibilityFactor,
+        },
+        ridePath,
       },
-      ridePath,
-    },
-  });
+    });
+  } catch (error) {
+    // Concurrent duplicate lock on the same bet should behave idempotently.
+    if (isUniqueConstraintViolation(error, 'bet_id')) {
+      const existing = await betBoostLockRepository.findByBetId(betId);
+      if (existing) {
+        return {
+          success: true,
+          data: buildLockResponse(existing),
+        };
+      }
+    }
+
+    if (isUniqueConstraintViolation(error, 'reward_id')) {
+      await userRewardRepository.updateStatus(rewardId, 'USED');
+      return {
+        success: false,
+        error: {
+          code: ReasonCode.REWARD_ALREADY_USED,
+          message: 'Reward has already been used',
+        },
+      };
+    }
+
+    throw error;
+  }
 
   // Mark reward as used
   await userRewardRepository.updateStatus(rewardId, 'USED');
@@ -500,6 +530,31 @@ function getMaxRideValue(
 function roundToDecimals(value: number, decimals: number): number {
   const factor = Math.pow(10, decimals);
   return Math.round(value * factor) / factor;
+}
+
+function isUniqueConstraintViolation(
+  error: unknown,
+  column: 'bet_id' | 'reward_id'
+): boolean {
+  const candidate = error as {
+    code?: string;
+    message?: string;
+    detail?: string;
+    constraint?: string;
+  };
+
+  const context = `${candidate.message ?? ''} ${candidate.detail ?? ''} ${candidate.constraint ?? ''}`
+    .toLowerCase();
+
+  if (candidate.code === 'SQLITE_CONSTRAINT' || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    return context.includes(`bet_boost_locks.${column}`) || context.includes(column);
+  }
+
+  if (candidate.code === '23505') {
+    return context.includes(column);
+  }
+
+  return false;
 }
 
 export const boostLockService = {

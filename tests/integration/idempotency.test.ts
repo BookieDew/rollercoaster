@@ -125,11 +125,17 @@ describe('Idempotency Integration Tests', () => {
       };
 
       // Make multiple requests
-      await Promise.all([
+      const responses = await Promise.all([
         request(app).post('/api/boost/lock').set('X-API-Key', API_KEY).send(lockPayload),
         request(app).post('/api/boost/lock').set('X-API-Key', API_KEY).send(lockPayload),
         request(app).post('/api/boost/lock').set('X-API-Key', API_KEY).send(lockPayload),
       ]);
+
+      for (const response of responses) {
+        expect(response.status).toBe(201);
+      }
+      const uniqueLockIds = new Set(responses.map((response) => response.body.lock_id));
+      expect(uniqueLockIds.size).toBe(1);
 
       // Check database has only one lock
       const locks = await db('bet_boost_locks').where({ bet_id: 'idempotent-bet-2' });

@@ -32,7 +32,7 @@ export const createRewardProfileSchema = z.object({
   max_eligibility_odds_weight: z.number().min(0).max(1).default(0.25),
   effective_min_floor_rate: z.number().min(0).max(1).default(0.35),
   ride_mode: z.enum(['WAVES', 'LINEAR']).default('WAVES'),
-  ride_duration_seconds: z.number().int().min(60).max(86400),
+  ride_duration_seconds: z.number().int().min(1).max(86400),
 }).refine(data => data.min_boost_pct <= data.max_boost_pct, {
   message: 'min_boost_pct must be less than or equal to max_boost_pct',
   path: ['min_boost_pct'],
@@ -69,7 +69,7 @@ export const updateRewardProfileSchema = z.object({
   max_eligibility_odds_weight: z.number().min(0).max(1).optional(),
   effective_min_floor_rate: z.number().min(0).max(1).optional(),
   ride_mode: z.enum(['WAVES', 'LINEAR']).optional(),
-  ride_duration_seconds: z.number().int().min(60).max(86400).optional(),
+  ride_duration_seconds: z.number().int().min(1).max(86400).optional(),
   is_active: z.boolean().optional(),
 }).refine(data => {
   if (

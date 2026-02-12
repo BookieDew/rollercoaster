@@ -47,6 +47,7 @@ describe('deterministicRideGenerator', () => {
       let earlyCount = 0;
       let midCount = 0;
       let lateCount = 0;
+      let noCrashEndCount = 0;
 
       for (let i = 0; i < sampleCount; i++) {
         const crashPct = deriveCrashPct(
@@ -55,6 +56,11 @@ describe('deterministicRideGenerator', () => {
           minCrashSeconds
         );
         const crashSeconds = crashPct * durationSeconds;
+
+        if (crashPct >= 1) {
+          noCrashEndCount++;
+          continue;
+        }
 
         expect(crashSeconds).toBeGreaterThanOrEqual(minCrashSeconds);
         if (crashSeconds < earlyEnd) {
@@ -66,13 +72,18 @@ describe('deterministicRideGenerator', () => {
         }
       }
 
-      const earlyRatio = earlyCount / sampleCount;
-      const midRatio = midCount / sampleCount;
-      const lateRatio = lateCount / sampleCount;
+      const crashingSampleCount = sampleCount - noCrashEndCount;
+      expect(crashingSampleCount).toBeGreaterThan(0);
+
+      const earlyRatio = earlyCount / crashingSampleCount;
+      const midRatio = midCount / crashingSampleCount;
+      const lateRatio = lateCount / crashingSampleCount;
+      const noCrashRatio = noCrashEndCount / sampleCount;
 
       expect(earlyRatio).toBeCloseTo(config.timeBucketWeights.early, 1);
       expect(midRatio).toBeCloseTo(config.timeBucketWeights.mid, 1);
       expect(lateRatio).toBeCloseTo(config.timeBucketWeights.late, 1);
+      expect(noCrashRatio).toBeCloseTo(config.noCrashEndWeight, 1);
     });
 
     it('should follow configured crash-phase weights over 15k deterministic samples', () => {
@@ -114,6 +125,9 @@ describe('deterministicRideGenerator', () => {
       for (let i = 0; i < sampleCount; i++) {
         const seed = `phase-realized-${i}`;
         const crashPct = deriveCrashPct(seed, durationSeconds, minCrashSeconds);
+        if (crashPct >= 1) {
+          continue;
+        }
         const ride = generateRide(seed, {
           checkpointCount: 22,
           volatility: 0.5,
@@ -144,9 +158,12 @@ describe('deterministicRideGenerator', () => {
         }
       }
 
-      const upRatio = upCount / sampleCount;
-      const peakRatio = peakCount / sampleCount;
-      const downRatio = downCount / sampleCount;
+      const realizedCount = upCount + peakCount + downCount;
+      expect(realizedCount).toBeGreaterThan(0);
+
+      const upRatio = upCount / realizedCount;
+      const peakRatio = peakCount / realizedCount;
+      const downRatio = downCount / realizedCount;
 
       expect(upRatio).toBeCloseTo(config.phaseWeights.up, 1);
       expect(peakRatio).toBeCloseTo(config.phaseWeights.peak, 1);

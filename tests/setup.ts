@@ -1,6 +1,7 @@
 // Test setup file
 process.env.NODE_ENV = 'test';
 process.env.API_KEY_SECRET = 'test-api-key';
+process.env.ADMIN_API_KEY_SECRET = 'test-api-key';
 process.env.HMAC_SECRET = 'test-hmac-secret';
 process.env.HMAC_MAX_SKEW_MS = '300000';
 process.env.HMAC_REPLAY_CACHE_SIZE = '1000';

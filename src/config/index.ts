@@ -9,6 +9,7 @@ export interface Config {
   };
   api: {
     keySecret: string;
+    adminKeySecret: string;
     hmacSecret: string;
     hmacMaxSkewMs: number;
     hmacReplayCacheSize: number;
@@ -53,6 +54,7 @@ function getNodeEnv(): 'development' | 'production' | 'test' {
 const databaseUrl = getEnvVar('DATABASE_URL', 'sqlite://./dev.db');
 const dbConfig = parseDbUrl(databaseUrl);
 const apiKeySecret = getEnvVar('API_KEY_SECRET', 'dev-secret-key');
+const adminKeySecret = getEnvVar('ADMIN_API_KEY_SECRET', apiKeySecret);
 const hmacSecret = getEnvVar('HMAC_SECRET', apiKeySecret);
 const hmacMaxSkewMs = parseInt(getEnvVar('HMAC_MAX_SKEW_MS', '300000'), 10);
 const hmacReplayCacheSize = parseInt(getEnvVar('HMAC_REPLAY_CACHE_SIZE', '10000'), 10);
@@ -67,6 +69,7 @@ export const config: Config = {
   },
   api: {
     keySecret: apiKeySecret,
+    adminKeySecret,
     hmacSecret,
     hmacMaxSkewMs,
     hmacReplayCacheSize,

@@ -8,6 +8,8 @@ All endpoints require authentication via one of:
 - `X-API-Key` header with your API key
 - `X-Signature` + `X-Timestamp` headers for HMAC authentication
 
+Admin/config endpoints (`/api/profiles`, `/api/simulation`) require an admin API key in `X-API-Key`.
+
 ```bash
 # Using API Key
 curl -H "X-API-Key: your-api-key" ...
@@ -386,10 +388,11 @@ Note: The bet is already placed. This call starts the ride for that bet.
 
 Note: Ride volatility is derived from ticket strength (more selections/odds = bigger swings).
 Crash timing is deterministic per reward but can occur before the end time.
-Ride duration is randomized between 2–15 seconds; crash time is drawn from a scaled Beta distribution.
+Ride duration is randomized between 2–15 seconds; crash timing uses weighted early/mid/late buckets.
 `theoretical_max_boost_pct` represents the peak boost the user could have locked if they stopped at the best moment on that ride.
 When the ride is no longer active, the response distinguishes:
 `RIDE_CRASHED` (crash happened) vs `RIDE_ENDED` (ride ended without a crash event).
+Some rides intentionally end without a prior crash to support `RIDE_ENDED` flows.
 Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes cannot occur too early.
 `ride_path` values are the effective boost percentages (after ticket strength and caps), i.e. what the bettor would actually see.
 
@@ -444,9 +447,9 @@ Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes ca
   "ride_end_at_offset_seconds": 9.4,
   "ride_crash_at_offset_seconds": 5.8,
   "ride_path": [
-    { "time_pct": 0, "base_boost_value": 0.31 },
-    { "time_pct": 0.02, "base_boost_value": 0.33 },
-    { "time_pct": 1, "base_boost_value": 0 }
+    { "timePct": 0, "baseBoostValue": 0.31 },
+    { "timePct": 0.02, "baseBoostValue": 0.33 },
+    { "timePct": 1, "baseBoostValue": 0 }
   ]
 }
 
@@ -463,9 +466,9 @@ Crash timing is clamped by a hard minimum (RIDE_MIN_CRASH_SECONDS) so crashes ca
   "ride_end_at_offset_seconds": 9.4,
   "ride_crash_at_offset_seconds": 5.8,
   "ride_path": [
-    { "time_pct": 0, "base_boost_value": 0.31 },
-    { "time_pct": 0.02, "base_boost_value": 0.33 },
-    { "time_pct": 1, "base_boost_value": 0 }
+    { "timePct": 0, "baseBoostValue": 0.31 },
+    { "timePct": 0.02, "baseBoostValue": 0.33 },
+    { "timePct": 1, "baseBoostValue": 0 }
   ]
 }
 ```
@@ -499,10 +502,10 @@ Ride path is only returned after lock to avoid revealing the full ride in advanc
   "ride_end_at_offset_seconds": 9.4,
   "ride_crash_at_offset_seconds": 5.8,
   "ride_path": [
-    { "time_pct": 0, "base_boost_value": 0.45 },
-    { "time_pct": 0.02, "base_boost_value": 0.47 },
+    { "timePct": 0, "baseBoostValue": 0.45 },
+    { "timePct": 0.02, "baseBoostValue": 0.47 },
     // ... 60 points total
-    { "time_pct": 1, "base_boost_value": 0 }
+    { "timePct": 1, "baseBoostValue": 0 }
   ]
 }
 ```
@@ -526,10 +529,10 @@ Ride path is only returned after lock to avoid revealing the full ride in advanc
   "ride_end_at_offset_seconds": 9.4,
   "ride_crash_at_offset_seconds": 5.8,
   "ride_path": [
-    { "time_pct": 0, "base_boost_value": 0.45 },
-    { "time_pct": 0.02, "base_boost_value": 0.47 },
+    { "timePct": 0, "baseBoostValue": 0.45 },
+    { "timePct": 0.02, "baseBoostValue": 0.47 },
     // ... 60 points total
-    { "time_pct": 1, "base_boost_value": 0 }
+    { "timePct": 1, "baseBoostValue": 0 }
   ]
 }
 ```
@@ -684,7 +687,7 @@ All error responses follow this format:
 | `REWARD_ALREADY_USED` | Reward has been locked to a bet |
 | `NOT_OPTED_IN` | User hasn't opted into the reward |
 | `ALREADY_OPTED_IN` | User already opted in |
-| `RIDE_ENDED` | Ride has ended or crashed early |
+| `RIDE_ENDED` | Ride reached end time without an earlier crash event |
 | `BET_ALREADY_LOCKED` | Bet ID already has a lock |
 | `LOCK_NOT_FOUND` | No lock exists for bet |
 | `BET_ALREADY_SETTLED` | Bet already settled |
