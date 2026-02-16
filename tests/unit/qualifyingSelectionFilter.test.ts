@@ -67,6 +67,35 @@ describe('qualifyingSelectionFilter', () => {
       expect(result.qualifying).toHaveLength(0);
       expect(result.disqualified).toHaveLength(1);
     });
+
+    it('should treat SGP legs as non-qualifying components', () => {
+      const sgpTicket: Selection[] = [
+        { id: 'sgp-1', odds: 3.2, selection_type: 'SGP_COMPOSITE', sgp_group_id: 'g1' },
+        { id: 'sgp-1-leg-1', odds: 1.6, selection_type: 'SGP_LEG', sgp_group_id: 'g1' },
+        { id: 'sgp-1-leg-2', odds: 1.8, selection_type: 'SGP_LEG', sgp_group_id: 'g1' },
+      ];
+
+      const result = filterQualifyingSelections(sgpTicket, 1.2);
+
+      expect(result.qualifying).toHaveLength(1);
+      expect(result.qualifying[0].id).toBe('sgp-1');
+      expect(result.disqualified).toHaveLength(2);
+      expect(result.disqualified.every((selection) => selection.ineligible_reason === 'SGP_LEG_COMPONENT')).toBe(true);
+    });
+
+    it('should count duplicate SGP composites only once per group', () => {
+      const sgpTicket: Selection[] = [
+        { id: 'sgp-1', odds: 2.4, selection_type: 'SGP_COMPOSITE', sgp_group_id: 'g1' },
+        { id: 'sgp-1-duplicate', odds: 2.5, selection_type: 'SGP_COMPOSITE', sgp_group_id: 'g1' },
+      ];
+
+      const result = filterQualifyingSelections(sgpTicket, 1.2);
+
+      expect(result.qualifying).toHaveLength(1);
+      expect(result.qualifying[0].id).toBe('sgp-1');
+      expect(result.disqualified).toHaveLength(1);
+      expect(result.disqualified[0].ineligible_reason).toBe('DUPLICATE_SGP_COMPOSITE');
+    });
   });
 
   describe('meetsMinSelectionCount', () => {

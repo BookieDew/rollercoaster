@@ -7,6 +7,8 @@ export interface Selection {
   name?: string;
   market?: string;
   event?: string;
+  selection_type?: 'STANDARD' | 'SGP_COMPOSITE' | 'SGP_LEG';
+  sgp_group_id?: string;
   eligible?: boolean;
   ineligible_reason?: string;
 }

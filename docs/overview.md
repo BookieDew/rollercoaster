@@ -19,6 +19,10 @@ Important: stake and sportsbook odds never change. The reward only adds bonus pa
 ## Latest functionality in this version
 - Precheck eligibility endpoint lets operators validate the ticket before ride start to avoid bad UX.
 - Selection-level exclusion is supported (`eligible=false`, optional `ineligible_reason`) for cases like boosted odds or zero-margin markets.
+- Same Game Parlay (SGP) support is explicit and safe:
+  - send one priced `SGP_COMPOSITE` selection
+  - optional `SGP_LEG` entries are accepted but never counted
+  - all SGP entries must include `sgp_group_id`
 - Two ride modes are available per profile:
   - `WAVES`: multi-peak dynamic ride.
   - `LINEAR`: straight climb from effective min boost to effective max boost.

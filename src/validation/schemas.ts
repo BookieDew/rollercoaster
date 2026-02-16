@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const selectionTypeSchema = z.enum(['STANDARD', 'SGP_COMPOSITE', 'SGP_LEG']);
+
 // Selection schema
 export const selectionSchema = z.object({
   id: z.string().min(1),
@@ -7,8 +9,27 @@ export const selectionSchema = z.object({
   name: z.string().optional(),
   market: z.string().optional(),
   event: z.string().optional(),
+  selection_type: selectionTypeSchema.optional(),
+  sgp_group_id: z.string().min(1).max(100).optional(),
   eligible: z.boolean().optional(),
   ineligible_reason: z.string().max(200).optional(),
+}).superRefine((data, ctx) => {
+  if (data.selection_type === 'STANDARD' && data.sgp_group_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'sgp_group_id is only allowed for SGP_COMPOSITE or SGP_LEG selections',
+      path: ['sgp_group_id'],
+    });
+  }
+
+  if ((data.selection_type === 'SGP_COMPOSITE' || data.selection_type === 'SGP_LEG')
+    && !data.sgp_group_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'sgp_group_id is required when selection_type is SGP_COMPOSITE or SGP_LEG',
+      path: ['sgp_group_id'],
+    });
+  }
 });
 
 // Ticket schema

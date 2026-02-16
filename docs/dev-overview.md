@@ -41,6 +41,11 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - Ride modes are profile-configurable: `WAVES` or `LINEAR`.
 - Ride path is returned for lock responses and for crashed/ended quote responses.
 - Selections can be excluded via `eligible: false` (optional `ineligible_reason`).
+- SGP model uses explicit selection metadata:
+  - `selection_type`: `STANDARD | SGP_COMPOSITE | SGP_LEG`
+  - `sgp_group_id` required for `SGP_COMPOSITE` and `SGP_LEG`
+  - `SGP_LEG` selections are always excluded from qualification math
+  - duplicate `SGP_COMPOSITE` entries in the same `sgp_group_id` are ignored
 
 ## Core modules (what to review)
 - `src/computations/ticketStrengthScorer.ts` (non-linear strength)

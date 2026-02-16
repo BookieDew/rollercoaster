@@ -92,6 +92,48 @@ describe('Eligibility Integration Tests', () => {
       expect(optInRes.status).toBe(422);
       expect(optInRes.body.code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
     });
+
+    it('should count SGP composite once and ignore SGP legs', async () => {
+      const precheckRes = await request(app)
+        .post(`/api/rewards/${rewardId}/eligibility`)
+        .set('X-API-Key', API_KEY)
+        .send({
+          user_id: 'eligibility-user',
+          ticket: {
+            selections: [
+              { id: 's1', odds: 1.8 },
+              { id: 's2', odds: 1.9 },
+              { id: 'sgp-main', odds: 2.0, selection_type: 'SGP_COMPOSITE', sgp_group_id: 'g1' },
+              { id: 'sgp-leg-1', odds: 1.6, selection_type: 'SGP_LEG', sgp_group_id: 'g1' },
+              { id: 'sgp-leg-2', odds: 1.7, selection_type: 'SGP_LEG', sgp_group_id: 'g1' },
+            ],
+          },
+        });
+
+      expect(precheckRes.status).toBe(200);
+      expect(precheckRes.body.eligible).toBe(true);
+      expect(precheckRes.body.reason_code).toBe(ReasonCode.ELIGIBLE);
+      expect(precheckRes.body.qualifying_selection_count).toBe(3);
+      expect(precheckRes.body.total_selection_count).toBe(5);
+      expect(precheckRes.body.combined_odds).toBeCloseTo(6.84, 6);
+    });
+
+    it('should reject SGP selections missing sgp_group_id', async () => {
+      const precheckRes = await request(app)
+        .post(`/api/rewards/${rewardId}/eligibility`)
+        .set('X-API-Key', API_KEY)
+        .send({
+          user_id: 'eligibility-user',
+          ticket: {
+            selections: [
+              { id: 'sgp-main', odds: 2.0, selection_type: 'SGP_COMPOSITE' },
+            ],
+          },
+        });
+
+      expect(precheckRes.status).toBe(400);
+      expect(precheckRes.body.code).toBe('VALIDATION_ERROR');
+    });
   });
 
   describe('Minimum combined odds requirement', () => {

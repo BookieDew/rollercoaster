@@ -212,6 +212,12 @@ Selections can include optional flags to exclude them from qualification:
 `eligible: false` and optional `ineligible_reason` (e.g., BOOSTED_ODDS, ZERO_MARGIN).
 Excluded selections do not count toward qualifying selection count or combined odds.
 
+For Same Game Parlay (SGP), use explicit selection metadata:
+- `selection_type`: `STANDARD` (default), `SGP_COMPOSITE`, or `SGP_LEG`
+- `sgp_group_id`: required when `selection_type` is `SGP_COMPOSITE` or `SGP_LEG`
+- `SGP_LEG` entries never count toward qualifying selection count or combined odds
+- If multiple `SGP_COMPOSITE` entries share the same `sgp_group_id`, only the first counts
+
 ### Grant Reward
 
 **POST** `/api/rewards`
@@ -250,7 +256,9 @@ Excluded selections do not count toward qualifying selection count or combined o
     "selections": [
       { "id": "sel-001", "odds": 1.85 },
       { "id": "sel-002", "odds": 2.10, "eligible": false, "ineligible_reason": "BOOSTED_ODDS" },
-      { "id": "sel-003", "odds": 1.65 }
+      { "id": "sel-003", "odds": 1.65 },
+      { "id": "sgp-main", "odds": 2.40, "selection_type": "SGP_COMPOSITE", "sgp_group_id": "sgp-001" },
+      { "id": "sgp-leg-1", "odds": 1.60, "selection_type": "SGP_LEG", "sgp_group_id": "sgp-001" }
     ]
   }
 }
@@ -260,8 +268,8 @@ Excluded selections do not count toward qualifying selection count or combined o
   "eligible": true,
   "reason_code": "ELIGIBLE",
   "qualifying_selection_count": 3,
-  "total_selection_count": 3,
-  "combined_odds": 6.42,
+  "total_selection_count": 5,
+  "combined_odds": 7.326,
   "ticket_strength": 0.42
 }
 
@@ -270,7 +278,7 @@ Excluded selections do not count toward qualifying selection count or combined o
   "eligible": false,
   "reason_code": "MIN_SELECTIONS_NOT_MET",
   "qualifying_selection_count": 2,
-  "total_selection_count": 3,
+  "total_selection_count": 5,
   "combined_odds": 3.88,
   "ticket_strength": null
 }
