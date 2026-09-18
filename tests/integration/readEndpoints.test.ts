@@ -53,7 +53,7 @@ describe('Read Endpoints Integration Tests', () => {
     return rewardRes.body.id;
   }
 
-  async function startRideAndLock(userId: string, rewardId: string, betId: string): Promise<void> {
+  async function startRideAndLock(userId: string, rewardId: string, betId: string): Promise<Record<string, unknown>> {
     const selections = [
       { id: 's1', odds: 1.5 },
       { id: 's2', odds: 2.0 },
@@ -81,6 +81,7 @@ describe('Read Endpoints Integration Tests', () => {
       });
 
     expect(lockRes.status).toBe(201);
+    return lockRes.body;
   }
 
   it('returns reward by ID', async () => {
@@ -127,7 +128,7 @@ describe('Read Endpoints Integration Tests', () => {
     const rewardId = await grantReward(userId, profileId);
     const betId = 'read-bet-lock-1';
 
-    await startRideAndLock(userId, rewardId, betId);
+    const createdLock = await startRideAndLock(userId, rewardId, betId);
 
     const lockRes = await request(app)
       .get(`/api/boost/lock/${betId}`)
@@ -138,6 +139,28 @@ describe('Read Endpoints Integration Tests', () => {
     expect(lockRes.body.reward_id).toBe(rewardId);
     expect(lockRes.body.locked_boost_pct).toBeGreaterThan(0);
     expect(Array.isArray(lockRes.body.ride_path)).toBe(true);
+    expect(lockRes.body.maximum_model).toBe('WAVES_PRE_CRASH_SUPREMUM_V2');
+    expect(lockRes.body).toEqual(createdLock);
+
+    // Represent a historical lock without model metadata; reading/repeating the
+    // lock must omit the field and preserve its stored payout/path exactly.
+    const row = await db('bet_boost_locks').where({ bet_id: betId }).first();
+    const historicalSnapshot = JSON.parse(row.snapshot);
+    delete historicalSnapshot.maximumModel;
+    await db('bet_boost_locks').where({ bet_id: betId })
+      .update({ snapshot: JSON.stringify(historicalSnapshot) });
+    const expectedHistorical = { ...createdLock };
+    delete expectedHistorical.maximum_model;
+    const historicalRead = await request(app)
+      .get(`/api/boost/lock/${betId}`).set('X-API-Key', API_KEY);
+    expect(historicalRead.status).toBe(200);
+    expect(historicalRead.body).toEqual(expectedHistorical);
+    expect(historicalRead.body).not.toHaveProperty('maximum_model');
+    const repeated = await request(app)
+      .post('/api/boost/lock').set('X-API-Key', API_KEY)
+      .send({ user_id: userId, reward_id: rewardId, bet_id: betId });
+    expect(repeated.status).toBe(201);
+    expect(repeated.body).toEqual(expectedHistorical);
   });
 
   it('returns settlement by bet ID', async () => {

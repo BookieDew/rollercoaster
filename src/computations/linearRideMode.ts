@@ -37,7 +37,7 @@ export function buildLinearEffectiveRidePath(
           effectiveMaxBoost
         );
     points.push({
-      timePct: roundToDecimals(timePct, 6),
+      timePct,
       baseBoostValue: value,
     });
   }

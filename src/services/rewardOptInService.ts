@@ -3,7 +3,6 @@ import { rewardProfileRepository } from '../db/repositories/rewardProfileReposit
 import { rideDefinitionRepository } from '../db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import {
-  generateRide,
   deriveRideParams,
   deriveRideDurationSeconds,
 } from '../computations/deterministicRideGenerator';
@@ -13,11 +12,13 @@ import {
   meetsMinSelectionCount,
   meetsCombinedOddsThreshold,
   computeTicketStrength,
+  generatePhaseCorrectedRide,
 } from '../computations';
 import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
 import { config } from '../config';
+import { createRideMathSnapshot, resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
 
 export interface ServiceResult<T> {
   success: boolean;
@@ -261,7 +262,7 @@ export async function optIn(
     config.ride.maxDurationSeconds
   );
   const derived = deriveRideParams(seed, durationSeconds, config.ride.minCrashSeconds);
-  const ride = generateRide(seed, {
+  const ride = generatePhaseCorrectedRide(seed, {
     checkpointCount: derived.checkpointCount,
     volatility: derived.volatility,
     minBoostPct: profile.minBoostPct,
@@ -271,6 +272,9 @@ export async function optIn(
     durationSeconds,
     crashPct: derived.crashPct,
     minPeakDelaySeconds: 2,
+    qualifyingSelections: qualifying.length,
+    combinedOdds,
+    finalBoostConfig: profile,
   });
 
   // Start ride timing now (short duration)
@@ -296,6 +300,7 @@ export async function optIn(
     endTime,
     betId,
     {
+      rideMath: createRideMathSnapshot(profile, startTime, endTime, derived, 3, ride),
       selections,
       qualifyingSelections: qualifying,
       disqualifiedSelections: disqualified,
@@ -338,6 +343,8 @@ export async function optIn(
       durationSeconds,
       combinedOdds,
       ticketStrength,
+      mathSnapshotVersion: 3,
+      phaseDiagnostics: ride.phaseDiagnostics,
     },
   });
 
@@ -364,6 +371,12 @@ export async function optIn(
  * Gets the ride checkpoints for a reward.
  */
 export async function getRideCheckpoints(rewardId: string) {
+  const reward = await userRewardRepository.findById(rewardId);
+  if (reward?.ticketSnapshot?.rideMath != null) {
+    const math = await resolveRideMathSnapshot(reward!);
+    if (!math) throw new Error('Invalid saved ride math snapshot');
+    return resolveRideCheckpoints(rewardId, math);
+  }
   return rideDefinitionRepository.findByRewardId(rewardId);
 }
 

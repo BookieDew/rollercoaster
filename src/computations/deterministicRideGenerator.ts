@@ -5,6 +5,8 @@ export interface RideCheckpoint {
   index: number;
   timeOffsetPct: number;
   baseBoostValue: number;
+  /** V3 split boundary: retain the original incoming interpolation arithmetic. */
+  incomingSegmentEnd?: { timeOffsetPct: number; baseBoostValue: number };
 }
 
 export interface RideConfig {
@@ -929,7 +931,10 @@ export function interpolateRideValue(
   }
 
   const lower = checkpoints[lowerIdx];
-  const upper = checkpoints[lowerIdx + 1];
+  const next = checkpoints[lowerIdx + 1];
+  // Only V3 inserted boundaries carry this metadata. Using the original upper
+  // endpoint avoids round6 changes from reassociating a split segment's floats.
+  const upper = next.incomingSegmentEnd ?? next;
 
   // Linear interpolation
   const segmentPct = (pct - lower.timeOffsetPct) / (upper.timeOffsetPct - lower.timeOffsetPct);

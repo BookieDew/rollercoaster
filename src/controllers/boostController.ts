@@ -106,6 +106,7 @@ export async function getLock(
       effective_min_boost_pct: result.data.snapshot.effectiveMinBoostPct,
       effective_max_boost_pct: result.data.snapshot.maxEligibleBoostPct,
       theoretical_max_boost_pct: result.data.snapshot.maxPossibleBoostPct,
+      maximum_model: result.data.snapshot.maximumModel,
       boost_model: {
         selection_weight: result.data.snapshot.boostModel.selectionWeight,
         odds_weight: result.data.snapshot.boostModel.oddsWeight,

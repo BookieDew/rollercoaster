@@ -12,6 +12,10 @@ describe('Eligibility Integration Tests', () => {
     await db.migrate.latest();
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   afterAll(async () => {
     await db.destroy();
   });
@@ -352,13 +356,13 @@ describe('Eligibility Integration Tests', () => {
           },
         });
 
-      const now = Date.now();
-      await db('user_rewards')
-        .where({ id: rewardId })
-        .update({
-          start_time: new Date(now - 12000).toISOString(),
-          end_time: new Date(now - 1000).toISOString(),
-        });
+      // New rides freeze their timing at opt-in. Advance the evaluation clock
+      // to the persisted end instead of mutating one copy of the schedule.
+      const rewardRow = await db('user_rewards').where({ id: rewardId }).first();
+      const snapshot = JSON.parse(rewardRow.ticket_snapshot);
+      expect(snapshot.rideMath.version).toBe(3);
+      expect(snapshot.rideMath.crashPct).toBe(1);
+      jest.spyOn(Date, 'now').mockReturnValue(new Date(snapshot.rideMath.endTime).getTime());
 
       const quoteRes = await request(app)
         .post('/api/boost/quote')
@@ -372,6 +376,7 @@ describe('Eligibility Integration Tests', () => {
       expect(quoteRes.status).toBe(200);
       expect(quoteRes.body.eligible).toBe(false);
       expect(quoteRes.body.reason_code).toBe(ReasonCode.RIDE_ENDED);
+      expect(quoteRes.body.ride_elapsed_seconds).toBe(snapshot.rideMath.rideDurationSeconds);
       expect(quoteRes.body.current_boost_pct).toBe(0);
       expect(quoteRes.body.theoretical_max_boost_pct).toBeGreaterThan(0);
       expect(quoteRes.body.ride_end_at_offset_seconds).toBeGreaterThan(0);

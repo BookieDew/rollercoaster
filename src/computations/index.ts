@@ -52,3 +52,6 @@ export {
   calculateLinearBoostPctAtElapsed,
   buildLinearEffectiveRidePath,
 } from './linearRideMode';
+
+export { computeLinearModeMaxBoostPct, getMaxRideValue } from './rideReferenceMaximum';
+export { generatePhaseCorrectedRide, deriveFeasibleCrashPhase } from './feasibleRidePhase';

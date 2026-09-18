@@ -1,6 +1,4 @@
 import { userRewardRepository } from '../db/repositories/userRewardRepository';
-import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
-import { rideDefinitionRepository } from '../db/repositories/rideDefinitionRepository';
 import { betBoostLockRepository } from '../db/repositories/betBoostLockRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import {
@@ -9,12 +7,13 @@ import {
   calculateCombinedOdds,
   meetsCombinedOddsThreshold,
   computeTicketStrength,
+  computeLinearModeMaxBoostPct,
+  getMaxRideValue,
   interpolateRideValue,
   calculateElapsedPct,
   hasRideEnded as checkRideEnded,
   calculateFinalBoostDetails,
   computeBoostModelDetails,
-  deriveRideParams,
   buildEffectiveRidePath,
   buildLinearEffectiveRidePath,
   calculateLinearBoostPctAtElapsed,
@@ -23,7 +22,7 @@ import type { BetBoostLock, LockResponse } from '../types/betBoostLock';
 import type { Selection } from '../types/ticket';
 import type { RidePathPoint } from '../types/ride';
 import { ReasonCode } from '../types/reasonCodes';
-import { config } from '../config';
+import { resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
 
 export interface LockInput {
   userId: string;
@@ -125,31 +124,25 @@ export async function lockBoost(
 
   const storedSelections = (reward.ticketSnapshot.selections as Selection[]) ?? [];
 
-  const elapsedPct = calculateElapsedPct(reward.startTime, reward.endTime);
-  const rideDurationSeconds =
-    (new Date(reward.endTime).getTime() - new Date(reward.startTime).getTime()) / 1000;
-  const derived = deriveRideParams(
-    reward.seed,
-    rideDurationSeconds,
-    config.ride.minCrashSeconds
-  );
-  const crashPct = derived.crashPct;
-  const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
-  const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
-  const checkpointCount = derived.checkpointCount;
-  const volatility = derived.volatility;
-
-  // Get profile for eligibility thresholds
-  const profile = await rewardProfileRepository.findById(reward.profileVersionId);
-  if (!profile) {
+  // Prefer opt-in math inputs; old rides retain the explicit profile fallback.
+  const rideMath = await resolveRideMathSnapshot(reward);
+  if (!rideMath) {
+    const malformedSnapshot = reward.ticketSnapshot?.rideMath != null;
     return {
       success: false,
       error: {
-        code: ReasonCode.PROFILE_NOT_FOUND,
-        message: 'Associated profile not found',
+        code: malformedSnapshot ? ReasonCode.INVALID_CONFIGURATION : ReasonCode.PROFILE_NOT_FOUND,
+        message: malformedSnapshot ? 'Invalid saved ride math' : 'Associated profile not found',
       },
     };
   }
+
+  const profile = rideMath.profile;
+  const evaluationTime = new Date(Date.now());
+  const elapsedPct = calculateElapsedPct(rideMath.startTime, rideMath.endTime, evaluationTime);
+  const { rideDurationSeconds, crashPct, checkpointCount, volatility } = rideMath;
+  const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
+  const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
 
   // Filter qualifying selections
   const { qualifying, disqualified } = filterQualifyingSelections(
@@ -220,28 +213,43 @@ export async function lockBoost(
   let ridePath: RidePathPoint[];
 
   if (isLinearRide) {
+    const linearMaxBoostPct = computeLinearModeMaxBoostPct({
+      seed: reward.seed,
+      checkpointCount,
+      volatility,
+      rideDurationSeconds,
+      minPeakDelaySeconds: rideMath.minPeakDelaySeconds,
+      maximumModel: rideMath.maximumModel,
+      crashPct,
+      ticketStrength,
+      qualifyingSelections: qualifying.length,
+      combinedOdds,
+      config: finalBoostConfig,
+      minBoostPct: profile.minBoostPct,
+      maxBoostPct: profile.maxBoostPct,
+    });
     lockedBoostPct = calculateLinearBoostPctAtElapsed(
       elapsedPct,
       crashPct,
       effectiveMinBoostPct,
-      maxEligibleBoostPct
+      linearMaxBoostPct
     );
-    maxPossibleBoostPct = maxEligibleBoostPct;
+    maxPossibleBoostPct = linearMaxBoostPct;
     rideValueForSnapshot = lockedBoostPct;
-    maxRideValueForSnapshot = maxEligibleBoostPct;
+    maxRideValueForSnapshot = linearMaxBoostPct;
     ridePath = buildLinearEffectiveRidePath(
       60,
       crashPct,
       effectiveMinBoostPct,
-      maxEligibleBoostPct
+      linearMaxBoostPct
     );
   } else {
     // Get ride checkpoints and current value
-    const checkpoints = await rideDefinitionRepository.findByRewardId(rewardId);
-    const maxRideValue = getMaxRideValue(checkpoints, crashPct);
+    const checkpoints = await resolveRideCheckpoints(rewardId, rideMath);
+    const maxRideValue = getMaxRideValue(checkpoints, crashPct, rideMath.maximumModel);
     const rideValue = interpolateRideValue(
       checkpoints.map((cp) => ({
-        index: cp.checkpointIndex,
+        ...cp, index: cp.checkpointIndex,
         timeOffsetPct: cp.timeOffsetPct,
         baseBoostValue: cp.baseBoostValue,
       })),
@@ -267,6 +275,7 @@ export async function lockBoost(
       config: finalBoostConfig,
     });
 
+    lockedBoostPct = lockedBoostDetails.finalBoostPct;
     const maxBoostDetails = calculateFinalBoostDetails({
       rideValue: maxRideValue,
       ticketStrength,
@@ -275,15 +284,13 @@ export async function lockBoost(
       hasRideEnded: false,
       config: finalBoostConfig,
     });
-
-    lockedBoostPct = lockedBoostDetails.finalBoostPct;
     maxPossibleBoostPct = maxBoostDetails.finalBoostPct;
     rideValueForSnapshot = rideValue;
     maxRideValueForSnapshot = maxRideValue;
   }
 
   const rideCrashed = elapsedPct >= crashPct && crashPct < 1;
-  const rideEnded = checkRideEnded(reward.startTime, reward.endTime);
+  const rideEnded = checkRideEnded(rideMath.startTime, rideMath.endTime, evaluationTime);
 
   if (rideCrashed) {
     return {
@@ -292,6 +299,7 @@ export async function lockBoost(
         code: ReasonCode.RIDE_CRASHED,
         message: 'Ride has crashed - boost is zero',
         details: {
+          ride_elapsed_seconds: (evaluationTime.getTime() - new Date(rideMath.startTime).getTime()) / 1000,
           ride_end_at_offset_seconds: endOffsetSeconds,
           ride_crash_at_offset_seconds: crashOffsetSeconds,
           qualifying_selection_count: qualifying.length,
@@ -301,6 +309,7 @@ export async function lockBoost(
           effective_min_boost_pct: effectiveMinBoostPct,
           effective_max_boost_pct: maxEligibleBoostPct,
           theoretical_max_boost_pct: maxPossibleBoostPct,
+          maximum_model: rideMath.maximumModel,
           ticket_strength: ticketStrength,
           boost_model: toBoostModelResponse(boostModel),
           ride_path: ridePath,
@@ -315,6 +324,7 @@ export async function lockBoost(
         code: ReasonCode.RIDE_ENDED,
         message: 'Ride has ended - boost is zero',
         details: {
+          ride_elapsed_seconds: (evaluationTime.getTime() - new Date(rideMath.startTime).getTime()) / 1000,
           ride_end_at_offset_seconds: endOffsetSeconds,
           ride_crash_at_offset_seconds: crashOffsetSeconds,
           qualifying_selection_count: qualifying.length,
@@ -324,6 +334,7 @@ export async function lockBoost(
           effective_min_boost_pct: effectiveMinBoostPct,
           effective_max_boost_pct: maxEligibleBoostPct,
           theoretical_max_boost_pct: maxPossibleBoostPct,
+          maximum_model: rideMath.maximumModel,
           ticket_strength: ticketStrength,
           boost_model: toBoostModelResponse(boostModel),
           ride_path: ridePath,
@@ -372,6 +383,9 @@ export async function lockBoost(
         effectiveMinBoostPct,
         maxEligibleBoostPct,
         maxPossibleBoostPct,
+        maximumModel: rideMath.maximumModel,
+        mathSnapshotVersion: rideMath.version,
+        phaseDiagnostics: rideMath.phaseDiagnostics,
         boostModel: {
           selectionWeight: boostModel.selectionWeight,
           oddsWeight: boostModel.oddsWeight,
@@ -477,6 +491,7 @@ function buildLockResponse(lock: BetBoostLock): LockResponse {
     effective_min_boost_pct: lock.snapshot.effectiveMinBoostPct,
     effective_max_boost_pct: lock.snapshot.maxEligibleBoostPct,
     theoretical_max_boost_pct: lock.snapshot.maxPossibleBoostPct,
+    maximum_model: lock.snapshot.maximumModel,
     boost_model: toBoostModelResponse(lock.snapshot.boostModel),
     ride_stop_at_offset_seconds: roundToDecimals(
       lock.snapshot.rideDurationSeconds * lock.snapshot.elapsedPct,
@@ -509,22 +524,6 @@ function toBoostModelResponse(model: {
     odds_ratio: model.oddsRatio,
     eligibility_factor: model.eligibilityFactor,
   };
-}
-
-function getMaxRideValue(
-  checkpoints: { checkpointIndex: number; timeOffsetPct: number; baseBoostValue: number }[],
-  crashPct: number
-): number {
-  if (!checkpoints.length) {
-    return 0;
-  }
-
-  const eligible = checkpoints.filter((cp) => cp.timeOffsetPct <= crashPct);
-  if (!eligible.length) {
-    return 0;
-  }
-
-  return Math.max(...eligible.map((cp) => cp.baseBoostValue));
 }
 
 function roundToDecimals(value: number, decimals: number): number {

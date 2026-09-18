@@ -1,5 +1,5 @@
 import type { EligibilityReasonCode } from './reasonCodes';
-import type { RidePathPoint } from './ride';
+import type { RidePathPoint, MaximumModel } from './ride';
 
 export interface Selection {
   id: string;
@@ -44,8 +44,11 @@ export interface QuoteResponse {
   effective_min_boost_pct: number | null;
   effective_max_boost_pct: number | null;
   theoretical_max_boost_pct: number | null;
+  maximum_model?: MaximumModel;
   ticket_strength: number | null;
   boost_model?: BoostModelReport | null;
+  /** Authoritative elapsed sample offset in seconds; does not reveal ride duration. */
+  ride_elapsed_seconds?: number | null;
   ride_end_at_offset_seconds?: number | null;
   ride_crash_at_offset_seconds?: number | null;
   ride_path?: RidePathPoint[];

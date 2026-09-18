@@ -1,4 +1,5 @@
 import { buildEffectiveRidePath } from '../../src/computations/ridePathBuilder';
+import { calculateFinalBoostDetails, interpolateRideValue } from '../../src/computations';
 
 describe('ridePathBuilder', () => {
   const config = {
@@ -48,7 +49,7 @@ describe('ridePathBuilder', () => {
     }
   });
 
-  it('should avoid flat capped plateaus when raw values differ', () => {
+  it('preserves authoritative clamped plateaus instead of inventing wave detail', () => {
     const checkpoints = [
       { checkpointIndex: 0, timeOffsetPct: 0, baseBoostValue: 0.44 },
       { checkpointIndex: 1, timeOffsetPct: 0.2, baseBoostValue: 0.49 },
@@ -69,12 +70,18 @@ describe('ridePathBuilder', () => {
       50
     );
 
-    const preCrash = path.filter((p) => p.timePct < crashPct);
-    const maxPreCrash = Math.max(...preCrash.map((p) => p.baseBoostValue));
-    const topBand = preCrash.filter((p) => p.baseBoostValue >= (maxPreCrash - 0.03));
-    expect(topBand.length).toBeGreaterThan(2);
-
-    const uniqueTopBand = new Set(topBand.map((p) => p.baseBoostValue));
-    expect(uniqueTopBand.size).toBeGreaterThan(2);
+    const normalized = checkpoints.map(cp => ({ ...cp, index: cp.checkpointIndex }));
+    for (const point of path) {
+      const expected = calculateFinalBoostDetails({
+        rideValue: interpolateRideValue(normalized, point.timePct),
+        ticketStrength: 1,
+        qualifyingSelections: 10,
+        combinedOdds: 50,
+        hasRideEnded: point.timePct >= crashPct,
+        config,
+      });
+      expect(point.baseBoostValue).toBe(expected.finalBoostPct);
+    }
+    expect(path.filter(p => p.baseBoostValue === config.maxBoostPct).length).toBeGreaterThan(2);
   });
 });

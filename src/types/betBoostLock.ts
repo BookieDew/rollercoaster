@@ -1,5 +1,5 @@
 import type { Selection } from './ticket';
-import type { RidePathPoint } from './ride';
+import type { RidePathPoint, MaximumModel, RidePhaseDiagnostics } from './ride';
 import type { RideMode } from './rewardProfile';
 
 export interface BoostModelSnapshot {
@@ -55,6 +55,9 @@ export interface LockSnapshot {
   effectiveMinBoostPct: number;
   maxEligibleBoostPct: number;
   maxPossibleBoostPct: number;
+  maximumModel?: MaximumModel;
+  mathSnapshotVersion?: 1 | 2 | 3;
+  phaseDiagnostics?: RidePhaseDiagnostics;
   boostModel: BoostModelSnapshot;
   ridePath: RidePathPoint[];
 }
@@ -87,6 +90,7 @@ export interface LockResponse {
   effective_min_boost_pct: number;
   effective_max_boost_pct: number;
   theoretical_max_boost_pct: number;
+  maximum_model?: MaximumModel;
   boost_model: {
     selection_weight: number;
     odds_weight: number;

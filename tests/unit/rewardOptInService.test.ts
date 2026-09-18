@@ -272,6 +272,7 @@ describe('rewardOptInService', () => {
   });
 
   it('gets ride checkpoints by reward id', async () => {
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
     const checkpoints = [{ id: 'cp-1', rewardId: 'reward-1', checkpointIndex: 0, timeOffsetPct: 0, baseBoostValue: 0.1, createdAt: new Date().toISOString() }];
     jest.spyOn(rideDefinitionRepository, 'findByRewardId').mockResolvedValue(checkpoints);
 

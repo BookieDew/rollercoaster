@@ -1,4 +1,7 @@
 docs/*.local.md
+# Local Master-thread workflow and handoff notes (not release artifacts).
+/AGENTS.md
+/docs/ai/
 node_modules/
 dist/
 dev.db

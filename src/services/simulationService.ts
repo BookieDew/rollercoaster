@@ -1,7 +1,7 @@
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
 import { config } from '../config';
 import {
-  generateRide,
+  generatePhaseCorrectedRide,
   deriveRideParams,
   deriveRideDurationSeconds,
   interpolateRideValue,
@@ -11,9 +11,13 @@ import {
   calculateCombinedOdds,
   filterQualifyingSelections,
   calculateLinearBoostPctAtElapsed,
+  computeLinearModeMaxBoostPct,
+  meetsMinSelectionCount,
+  meetsCombinedOddsThreshold,
 } from '../computations';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
+import type { RidePhaseDiagnostics } from '../types/ride';
 
 export interface SimulationInput {
   profileId?: string;
@@ -34,6 +38,14 @@ export interface SimulationPoint {
 
 export interface SimulationResult {
   seed: string;
+  evaluation_mode: 'TICKET' | 'EXPLORATORY';
+  eligible: boolean | null;
+  reason_code: ReasonCode | null;
+  /** Both sample times and boost values retain the existing four-decimal serialization. */
+  serialization_decimals: 4;
+  maximum_model: 'WAVES_PRE_CRASH_SUPREMUM_V2';
+  math_snapshot_version: 3;
+  phase_diagnostics: RidePhaseDiagnostics;
   config: {
     checkpoint_count: number;
     volatility: number;
@@ -56,6 +68,7 @@ export interface SimulationResult {
     index: number;
     time_offset_pct: number;
     base_boost_value: number;
+    incoming_segment_end?: { time_offset_pct: number; base_boost_value: number };
   }>;
   curve: SimulationPoint[];
 }
@@ -144,6 +157,16 @@ export async function simulateRide(
     minCombinedOdds = profile.minCombinedOdds;
   }
 
+  if (simulationConfig.minBoostPct > simulationConfig.maxBoostPct) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.INVALID_CONFIGURATION,
+        message: 'Resolved minimum boost must not exceed maximum boost',
+      },
+    };
+  }
+
   // Analyze ticket if provided
   let ticketAnalysis: SimulationResult['ticket_analysis'];
   let ticketStrength = 0.5; // Default for simulation without ticket
@@ -151,7 +174,8 @@ export async function simulateRide(
   let combinedOddsForBoost = simulationConfig.maxBoostMinCombinedOdds ?? minCombinedOdds;
   let rideTicketStrength = 0;
 
-  if (input.ticket && input.ticket.selections.length > 0) {
+  let eligibilityReason: ReasonCode | null = null;
+  if (input.ticket) {
     const { qualifying } = filterQualifyingSelections(
       input.ticket.selections,
       minSelectionOdds
@@ -164,6 +188,11 @@ export async function simulateRide(
     qualifyingSelectionsForBoost = qualifying.length;
     combinedOddsForBoost = combinedOdds;
 
+    eligibilityReason = !meetsMinSelectionCount(qualifying.length, minSelections)
+      ? ReasonCode.MIN_SELECTIONS_NOT_MET
+      : !meetsCombinedOddsThreshold(combinedOdds, minCombinedOdds)
+        ? ReasonCode.MIN_COMBINED_ODDS_NOT_MET
+        : ReasonCode.ELIGIBLE;
     ticketAnalysis = {
       qualifying_selections: qualifying.length,
       combined_odds: combinedOdds,
@@ -172,13 +201,17 @@ export async function simulateRide(
   }
 
   // Generate ride
-  const ride = generateRide(seed, {
+  const ride = generatePhaseCorrectedRide(seed, {
     ...simulationConfig,
     rideMode: simulationConfig.rideMode,
     ticketStrength: rideTicketStrength,
     durationSeconds,
     crashPct: simulationConfig.crashPct,
     minPeakDelaySeconds: 2,
+    qualifyingSelections: qualifyingSelectionsForBoost,
+    combinedOdds: combinedOddsForBoost,
+    finalBoostConfig: simulationConfig,
+    evaluationTicketStrength: ticketStrength,
   });
 
   const boostModelDetails = computeBoostModelDetails(
@@ -195,6 +228,24 @@ export async function simulateRide(
     }
   );
 
+  const linearMaxBoostPct = simulationConfig.rideMode === 'LINEAR'
+    ? computeLinearModeMaxBoostPct({
+        seed,
+        checkpointCount: simulationConfig.checkpointCount,
+        volatility: simulationConfig.volatility,
+        rideDurationSeconds: durationSeconds,
+        maximumModel: 'WAVES_PRE_CRASH_SUPREMUM_V2',
+        crashPct: simulationConfig.crashPct,
+        ticketStrength,
+        qualifyingSelections: qualifyingSelectionsForBoost,
+        combinedOdds: combinedOddsForBoost,
+        config: simulationConfig,
+        minBoostPct: simulationConfig.minBoostPct,
+        maxBoostPct: simulationConfig.maxBoostPct,
+      })
+    : 0;
+  const isIneligible = input.ticket !== undefined && eligibilityReason !== ReasonCode.ELIGIBLE;
+
   // Generate sample curve points
   const samplePoints = input.samplePoints ?? 100;
   const curve: SimulationPoint[] = [];
@@ -205,7 +256,7 @@ export async function simulateRide(
       ? 0
       : interpolateRideValue(
           ride.checkpoints.map((cp) => ({
-            index: cp.index,
+            ...cp, index: cp.index,
             timeOffsetPct: cp.timeOffsetPct,
             baseBoostValue: cp.baseBoostValue,
           })),
@@ -220,7 +271,7 @@ export async function simulateRide(
             timePct,
             simulationConfig.crashPct,
             boostModelDetails.effectiveMinBoost,
-            boostModelDetails.effectiveMaxBoost
+            linearMaxBoostPct
           )
         : calculateFinalBoost({
             rideValue: baseRideValue,
@@ -242,7 +293,7 @@ export async function simulateRide(
     curve.push({
       time_pct: Math.round(timePct * 10000) / 10000,
       base_ride_value: Math.round(baseRideValue * 10000) / 10000,
-      final_boost_pct: hasEnded ? 0 : Math.round(finalBoostPct * 10000) / 10000,
+      final_boost_pct: isIneligible ? null : Math.round(finalBoostPct * 10000) / 10000,
     });
   }
 
@@ -250,6 +301,13 @@ export async function simulateRide(
     success: true,
     data: {
       seed,
+      evaluation_mode: input.ticket ? 'TICKET' : 'EXPLORATORY',
+      eligible: input.ticket ? !isIneligible : null,
+      reason_code: eligibilityReason,
+      serialization_decimals: 4,
+      maximum_model: 'WAVES_PRE_CRASH_SUPREMUM_V2',
+      math_snapshot_version: 3,
+      phase_diagnostics: ride.phaseDiagnostics,
       config: {
         checkpoint_count: simulationConfig.checkpointCount,
         volatility: simulationConfig.volatility,
@@ -268,6 +326,10 @@ export async function simulateRide(
         index: cp.index,
         time_offset_pct: cp.timeOffsetPct,
         base_boost_value: cp.baseBoostValue,
+        ...(cp.incomingSegmentEnd ? { incoming_segment_end: {
+          time_offset_pct: cp.incomingSegmentEnd.timeOffsetPct,
+          base_boost_value: cp.incomingSegmentEnd.baseBoostValue,
+        } } : {}),
       })),
       curve,
     },

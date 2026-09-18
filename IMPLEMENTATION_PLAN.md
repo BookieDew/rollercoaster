@@ -1,5 +1,25 @@
 # Combo Boost Rollercoaster API - Implementation Plan
 
+> Historical planning checklist: the unchecked items, proposed formulas, API
+> sketches, and directory tree below describe the original plan, not current
+> implementation status or acceptance criteria. They are intentionally retained
+> as history. Use [Developer Overview](docs/dev-overview.md),
+> [API Examples](docs/api-examples.md), actual `src/` types/services/computations,
+> migrations, and current tests for delivered behavior.
+>
+> Current model work includes versioned opt-in math snapshots, authoritative live
+> sample timing/path values, simulation eligibility/parity, and new-ride LINEAR
+> alignment to the true existing WAVES pre-crash maximum. Legacy rides/locks keep
+> their model. The maximum is not guaranteed lockable. Current local V3 adds a
+> feasible WAVES suffix correction with conditional 50/20/30 phase targets and
+> explicit early/flat/no-crash exceptions. It preserves timing, bounds, true
+> maxima, and V2 LINEAR behavior, but changes WAVES stopping opportunities.
+> V3 checkpoint JSON and interpolation metadata are authoritative; old versions
+> retain their saved model. The demo progressively draws observed samples.
+> Curve/browser acceptance and release remain separate; this checklist promises
+> neither RTP nor a universal wave peak count. Validate with `npm run build`
+> and `npm run test:coverage`.
+
 ## Overview
 A REST API service for a time-based "rollercoaster" loyalty reward that provides dynamic boost percentages for combo/parlay bets. The boost oscillates over time and can crash to 0%, creating urgency for users to lock in their boost.
 
@@ -410,5 +430,5 @@ MyAPIProject/
 3. **Run Unit Tests**: `npm test` to verify all computation modules
 4. **Run Integration Tests**: `npm run test:integration` to verify full API flows
 5. **Manual API Testing**: Use examples from `docs/api-examples.md` with curl
-6. **Verify Determinism**: Call quote multiple times with same reward/user/ticket and confirm identical results
+6. **Verify Determinism**: Use the same seed, frozen inputs/model, and controlled evaluation instant; successive live quotes normally change as time advances
 7. **Verify Idempotency**: Call lock twice with same bet_id and confirm no duplicate records

@@ -14,7 +14,7 @@ Important: stake and sportsbook odds never change. The reward only adds bonus pa
 4) Boost moves live with no countdown/ETA shown.
 5) User chooses when to stop and lock the current boost.
 6) On win: bonus payout = winnings x locked boost.
-7) On loss, crash, or ride end: bonus payout = 0.
+7) On loss: bonus payout = 0. A crash or ride end before a successful lock also leaves no bonus; later ride movement cannot change an existing lock.
 
 ## Latest functionality in this version
 - Precheck eligibility endpoint lets operators validate the ticket before ride start to avoid bad UX.
@@ -25,7 +25,7 @@ Important: stake and sportsbook odds never change. The reward only adds bonus pa
   - all SGP entries must include `sgp_group_id`
 - Two ride modes are available per profile:
   - `WAVES`: multi-peak dynamic ride.
-  - `LINEAR`: straight climb from effective min boost to effective max boost.
+  - `LINEAR`: straight climb from the effective minimum toward the same-seed WAVES ride maximum. It drops to zero at crash/end; the endpoint is a limit, not a guaranteed lockable boost.
 - Max boost accessibility is tunable with optional thresholds:
   - `max_boost_min_selections`
   - `max_boost_min_combined_odds`
@@ -33,11 +33,11 @@ Important: stake and sportsbook odds never change. The reward only adds bonus pa
   - `max_eligibility_selection_weight` (default 0.75)
   - `max_eligibility_odds_weight` (default 0.25)
   - `effective_min_floor_rate` (default 0.35)
-- Ride outputs include data for UI and analytics:
-  - current boost
-  - theoretical max boost
-  - ride crash/end offsets
-  - effective ride path (for visual animation and post-bet storytelling)
+- Profile maximum, ticket-adjusted cap, per-ride maximum, observed sample peak, and locked boost are distinct. Meeting max-boost thresholds opens cap access; it does not guarantee that a ride reaches the cap.
+- New rides freeze their profile, mode, and timing settings at opt-in. Later profile edits do not change an already-started new ride or a locked payout.
+- The maximum model keeps the true pre-crash WAVES maximum introduced in v2; LINEAR uses that same maximum. Unversioned/v1 rides retain their older checkpoint reference, which can understate values between checkpoints. Saved v2 rides, existing locks, and settlements also retain their original behavior.
+- Active quotes provide current boost and authoritative elapsed sample time, without a future path or crash/end schedule. Completed/locked responses also provide sampled paths and timing offsets.
+- The local demo progressively draws received authoritative boost samples while the ride runs, then freezes the exact stop/terminal result. It retains raw JSON and final outcomes; its chart does not forecast the unobserved path.
 
 ## Why operators use it
 - Adds a high-intensity moment after bet placement without changing core sportsbook pricing.
@@ -67,7 +67,21 @@ Operators can configure:
 - Ride mode:
   - WAVES or LINEAR
 
-Internal ride generation remains deterministic and auditable, but not predictable to bettors.
+The current local implementation uses a v3 phase correction for feasible new WAVES
+rides. It targets UP/PEAK/DOWN at 50/20/30 only when enough time and effective boost
+range remain. The last part of the ride then rises, stays near its top, or falls in
+the actual payable boost. Very early, flat/rounding-degenerate, and no-crash rides
+remain unchanged and are classified separately. These targets are not a guarantee
+of exact percentages in every finite sample or of what every client will observe.
+
+The correction preserves each baseline ride's true maximum, floor/cap, duration,
+and crash/no-crash choice, but changes when boosts are available in the final
+bounded suffix. That changes WAVES stopping opportunities and potential payouts;
+maximum preservation does not imply payout neutrality. LINEAR is unchanged from
+its v2 behavior. Historical rides keep their saved model; historical phase labels
+still describe checkpoint shaping rather than guaranteed effective crash direction.
+This describes local code, not a production release or an RTP/payout guarantee.
+Curve aesthetics and final acceptance remain separate review items.
 
 ## Risk controls and safeguards
 - Bonus applies only to winnings; bettors never lose extra stake through this feature.
