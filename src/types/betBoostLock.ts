@@ -14,6 +14,7 @@ export interface BoostModelSnapshot {
 
 export interface BetBoostLock {
   id: string;
+  brandId: string;
   betId: string;
   rewardId: string;
   lockedBoostPct: number;
@@ -63,6 +64,7 @@ export interface LockSnapshot {
 }
 
 export interface CreateBetBoostLockInput {
+  brandId: string;
   betId: string;
   rewardId: string;
   lockedBoostPct: number;
@@ -80,6 +82,7 @@ export interface LockRequest {
 
 export interface LockResponse {
   lock_id: string;
+  brand_id: string;
   bet_id: string;
   reward_id: string;
   locked_boost_pct: number;
@@ -108,6 +111,7 @@ export interface LockResponse {
 
 export interface BetBoostLockDTO {
   id: string;
+  brand_id: string;
   bet_id: string;
   reward_id: string;
   locked_boost_pct: number;
@@ -121,6 +125,7 @@ export interface BetBoostLockDTO {
 export function toDTO(lock: BetBoostLock): BetBoostLockDTO {
   return {
     id: lock.id,
+    brand_id: lock.brandId,
     bet_id: lock.betId,
     reward_id: lock.rewardId,
     locked_boost_pct: lock.lockedBoostPct,

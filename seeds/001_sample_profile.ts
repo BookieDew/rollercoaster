@@ -10,7 +10,7 @@ export async function seed(knex: Knex): Promise<void> {
   }
 
   // Clear existing entries
-  await knex('settlement_records').del();
+  await knex('bet_settlements').del();
   await knex('bet_boost_locks').del();
   await knex('ride_definitions').del();
   await knex('user_rewards').del();
@@ -32,6 +32,9 @@ export async function seed(knex: Knex): Promise<void> {
       ride_duration_seconds: 3600, // 1 hour
       checkpoint_count: 10,
       volatility: 0.5,
+      brand_id: 'demo',
+      max_bonus_minor: JSON.stringify({ EUR: 50_000 }),
+      reward_validity_seconds: 604_800, // 7 days
       is_active: true,
       created_at: now,
       updated_at: now,
@@ -48,6 +51,9 @@ export async function seed(knex: Knex): Promise<void> {
       ride_duration_seconds: 7200, // 2 hours
       checkpoint_count: 20,
       volatility: 0.7,
+      brand_id: 'demo',
+      max_bonus_minor: JSON.stringify({ EUR: 50_000 }),
+      reward_validity_seconds: 604_800, // 7 days
       is_active: true,
       created_at: now,
       updated_at: now,
@@ -64,6 +70,9 @@ export async function seed(knex: Knex): Promise<void> {
       ride_duration_seconds: 900, // 15 minutes
       checkpoint_count: 5,
       volatility: 0.9,
+      brand_id: 'demo',
+      max_bonus_minor: JSON.stringify({ EUR: 50_000 }),
+      reward_validity_seconds: 604_800, // 7 days
       is_active: true,
       created_at: now,
       updated_at: now,
@@ -80,6 +89,9 @@ export async function seed(knex: Knex): Promise<void> {
       ride_duration_seconds: 5400, // 1.5 hours
       checkpoint_count: 15,
       volatility: 0.2,
+      brand_id: 'demo',
+      max_bonus_minor: JSON.stringify({ EUR: 50_000 }),
+      reward_validity_seconds: 604_800, // 7 days
       is_active: true,
       created_at: now,
       updated_at: now,
@@ -96,6 +108,9 @@ export async function seed(knex: Knex): Promise<void> {
       ride_duration_seconds: 3600,
       checkpoint_count: 8,
       volatility: 0.4,
+      brand_id: 'demo',
+      max_bonus_minor: JSON.stringify({ EUR: 50_000 }),
+      reward_validity_seconds: 604_800, // 7 days
       is_active: false, // Inactive
       created_at: now,
       updated_at: now,

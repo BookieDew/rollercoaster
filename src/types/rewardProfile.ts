@@ -1,7 +1,15 @@
+import { LEGACY_BRAND_ID } from './brand';
+
 export type RideMode = 'WAVES' | 'LINEAR';
 
+/**
+ * brandId, maxBonusMinor and rewardValiditySeconds are typed optional only so
+ * entities built by code that predates Phase 1a still type-check. Repositories
+ * always populate them; missing means brand 'default', no caps and no expiry.
+ */
 export interface RewardProfileVersion {
   id: string;
+  brandId?: string;
   name: string;
   description: string | null;
   minSelections: number;
@@ -16,12 +24,19 @@ export interface RewardProfileVersion {
   effectiveMinFloorRate: number;
   rideMode: RideMode;
   rideDurationSeconds: number;
+  /** Per-currency bonus cap in minor units; {} on legacy profiles. */
+  maxBonusMinor?: Record<string, number>;
+  /** Seconds a granted reward stays usable; null (legacy) = never expires. */
+  rewardValiditySeconds?: number | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateRewardProfileInput {
+  brandId: string;
+  maxBonusMinor: Record<string, number>;
+  rewardValiditySeconds: number;
   name: string;
   description?: string;
   minSelections: number;
@@ -53,11 +68,14 @@ export interface UpdateRewardProfileInput {
   effectiveMinFloorRate?: number;
   rideMode?: RideMode;
   rideDurationSeconds?: number;
+  maxBonusMinor?: Record<string, number>;
+  rewardValiditySeconds?: number;
   isActive?: boolean;
 }
 
 export interface RewardProfileDTO {
   id: string;
+  brand_id: string;
   name: string;
   description: string | null;
   min_selections: number;
@@ -72,6 +90,8 @@ export interface RewardProfileDTO {
   effective_min_floor_rate: number;
   ride_mode: RideMode;
   ride_duration_seconds: number;
+  max_bonus_minor: Record<string, number>;
+  reward_validity_seconds: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -80,6 +100,7 @@ export interface RewardProfileDTO {
 export function toDTO(profile: RewardProfileVersion): RewardProfileDTO {
   return {
     id: profile.id,
+    brand_id: profile.brandId ?? LEGACY_BRAND_ID,
     name: profile.name,
     description: profile.description,
     min_selections: profile.minSelections,
@@ -94,6 +115,8 @@ export function toDTO(profile: RewardProfileVersion): RewardProfileDTO {
     effective_min_floor_rate: profile.effectiveMinFloorRate,
     ride_mode: profile.rideMode,
     ride_duration_seconds: profile.rideDurationSeconds,
+    max_bonus_minor: profile.maxBonusMinor ?? {},
+    reward_validity_seconds: profile.rewardValiditySeconds ?? null,
     is_active: profile.isActive,
     created_at: profile.createdAt,
     updated_at: profile.updatedAt,

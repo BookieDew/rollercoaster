@@ -4,6 +4,7 @@ import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import routes from './routes';
+import { startRewardExpiryJob, type RewardExpiryJob } from './services/rewardExpiryService';
 
 const app = express();
 
@@ -44,6 +45,12 @@ function startServer(port?: number): ReturnType<typeof app.listen> {
     const demoState = config.server.demoUiEnabled ? 'enabled at /demo' : 'disabled';
     console.log(`Server running on port ${listenPort} in ${config.server.env} mode (demo UI ${demoState})`);
   });
+
+  // Reward expiry runs only while a real server is up: never on import, never in test.
+  if (config.server.env !== 'test') {
+    const expiryJob: RewardExpiryJob | null = startRewardExpiryJob(config.rewards.expiryIntervalSeconds);
+    server.once('close', () => expiryJob?.stop());
+  }
   return server;
 }
 

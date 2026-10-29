@@ -145,6 +145,7 @@ function getStatusCodeForReasonCode(code: ReasonCode): number {
     case ReasonCode.BET_ALREADY_BOUND:
     case ReasonCode.BET_ALREADY_LOCKED:
     case ReasonCode.BET_ALREADY_SETTLED:
+    case ReasonCode.REPLACEMENT_ALREADY_USED:
       return 409;
 
     case ReasonCode.MIN_SELECTIONS_NOT_MET:
@@ -157,7 +158,8 @@ function getStatusCodeForReasonCode(code: ReasonCode): number {
     case ReasonCode.RIDE_CRASHED:
     case ReasonCode.PROFILE_INACTIVE:
     case ReasonCode.INVALID_CONFIGURATION:
-    case ReasonCode.INVALID_OUTCOME:
+    case ReasonCode.CURRENCY_NOT_SUPPORTED:
+    case ReasonCode.SETTLEMENT_UNAVAILABLE:
       return 422;
 
     case ReasonCode.INTERNAL_ERROR:

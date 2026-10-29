@@ -241,6 +241,22 @@ describe('loadConfig validation', () => {
       expect(config.ride).toEqual({ minDurationSeconds: 2, maxDurationSeconds: 15, minCrashSeconds: 2 });
     });
 
+    it('defaults the reward expiry interval to 300 seconds and accepts 0 to disable it', () => {
+      expect(loadConfigFromEnv({ NODE_ENV: 'development' }).rewards)
+        .toEqual({ expiryIntervalSeconds: 300, rideExpiryGraceSeconds: 900 });
+      expect(loadConfigFromEnv({ NODE_ENV: 'development', REWARD_EXPIRY_INTERVAL_SECONDS: '0' }).rewards)
+        .toEqual({ expiryIntervalSeconds: 0, rideExpiryGraceSeconds: 900 });
+      expect(loadConfigFromEnv({ NODE_ENV: 'development', REWARD_EXPIRY_INTERVAL_SECONDS: ' 60 ' }).rewards)
+        .toEqual({ expiryIntervalSeconds: 60, rideExpiryGraceSeconds: 900 });
+    });
+
+    it('defaults the ride expiry grace to 900 seconds and accepts 0 to 31536000', () => {
+      expect(loadConfigFromEnv({ NODE_ENV: 'development', RIDE_EXPIRY_GRACE_SECONDS: '0' }).rewards.rideExpiryGraceSeconds)
+        .toBe(0);
+      expect(loadConfigFromEnv({ NODE_ENV: 'development', RIDE_EXPIRY_GRACE_SECONDS: ' 31536000 ' })
+        .rewards.rideExpiryGraceSeconds).toBe(31_536_000);
+    });
+
     it('defaults NODE_ENV to development', () => {
       expect(loadConfigFromEnv({}).server.env).toBe('development');
     });
@@ -266,6 +282,15 @@ describe('loadConfig validation', () => {
       ['RIDE_MIN_CRASH_SECONDS', 'soon', 'RIDE_MIN_CRASH_SECONDS must be a number'],
       ['DATABASE_POOL_MIN', 'x', 'DATABASE_POOL_MIN must be a whole number'],
       ['DATABASE_POOL_MAX', '0', 'DATABASE_POOL_MAX must be at least 1'],
+      ['REWARD_EXPIRY_INTERVAL_SECONDS', '-1', 'REWARD_EXPIRY_INTERVAL_SECONDS must be a whole number'],
+      ['REWARD_EXPIRY_INTERVAL_SECONDS', '1.5', 'REWARD_EXPIRY_INTERVAL_SECONDS must be a whole number'],
+      ['REWARD_EXPIRY_INTERVAL_SECONDS', 'often', 'REWARD_EXPIRY_INTERVAL_SECONDS must be a whole number'],
+      ['REWARD_EXPIRY_INTERVAL_SECONDS', '', 'REWARD_EXPIRY_INTERVAL_SECONDS must be a whole number'],
+      ['REWARD_EXPIRY_INTERVAL_SECONDS', '2147484', 'REWARD_EXPIRY_INTERVAL_SECONDS must be at most 2147483'],
+      ['RIDE_EXPIRY_GRACE_SECONDS', '-1', 'RIDE_EXPIRY_GRACE_SECONDS must be a whole number'],
+      ['RIDE_EXPIRY_GRACE_SECONDS', '1.5', 'RIDE_EXPIRY_GRACE_SECONDS must be a whole number'],
+      ['RIDE_EXPIRY_GRACE_SECONDS', '', 'RIDE_EXPIRY_GRACE_SECONDS must be a whole number'],
+      ['RIDE_EXPIRY_GRACE_SECONDS', '31536001', 'RIDE_EXPIRY_GRACE_SECONDS must be at most 31536000'],
     ])('rejects %s=%p', (name, value, expected) => {
       expect(configIssues({ NODE_ENV: 'development', [name]: value })).toEqual([expected]);
     });

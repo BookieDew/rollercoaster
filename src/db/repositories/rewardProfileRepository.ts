@@ -1,6 +1,7 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import type { RewardProfileVersion, CreateRewardProfileInput, UpdateRewardProfileInput } from '../../types/rewardProfile';
+import { parseBonusCapMap } from '../../money/minorUnits';
 
 const TABLE = 'reward_profile_versions';
 const INTERNAL_CHECKPOINT_COUNT = 12;
@@ -16,6 +17,7 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
 
   const record = {
     id,
+    brand_id: input.brandId,
     name: input.name,
     description: input.description ?? null,
     min_selections: input.minSelections,
@@ -33,6 +35,8 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
       ?? DEFAULT_EFFECTIVE_MIN_FLOOR_RATE,
     ride_mode: input.rideMode ?? DEFAULT_RIDE_MODE,
     ride_duration_seconds: input.rideDurationSeconds,
+    max_bonus_minor: JSON.stringify(input.maxBonusMinor),
+    reward_validity_seconds: input.rewardValiditySeconds,
     checkpoint_count: INTERNAL_CHECKPOINT_COUNT,
     volatility: INTERNAL_VOLATILITY,
     is_active: true,
@@ -49,13 +53,17 @@ export async function findById(id: string): Promise<RewardProfileVersion | null>
   return record ? mapToEntity(record) : null;
 }
 
-export async function findActive(): Promise<RewardProfileVersion[]> {
-  const records = await db(TABLE).where({ is_active: true }).orderBy('created_at', 'desc');
+export async function findActive(brandId?: string): Promise<RewardProfileVersion[]> {
+  const query = db(TABLE).where({ is_active: true }).orderBy('created_at', 'desc');
+  if (brandId !== undefined) query.andWhere({ brand_id: brandId });
+  const records = await query;
   return records.map(mapToEntity);
 }
 
-export async function findAll(): Promise<RewardProfileVersion[]> {
-  const records = await db(TABLE).orderBy('created_at', 'desc');
+export async function findAll(brandId?: string): Promise<RewardProfileVersion[]> {
+  const query = db(TABLE).orderBy('created_at', 'desc');
+  if (brandId !== undefined) query.where({ brand_id: brandId });
+  const records = await query;
   return records.map(mapToEntity);
 }
 
@@ -93,6 +101,8 @@ export async function update(id: string, input: UpdateRewardProfileInput): Promi
     updates.ride_mode = input.rideMode;
   }
   if (input.rideDurationSeconds !== undefined) updates.ride_duration_seconds = input.rideDurationSeconds;
+  if (input.maxBonusMinor !== undefined) updates.max_bonus_minor = JSON.stringify(input.maxBonusMinor);
+  if (input.rewardValiditySeconds !== undefined) updates.reward_validity_seconds = input.rewardValiditySeconds;
   if (input.isActive !== undefined) updates.is_active = input.isActive;
 
   await db(TABLE).where({ id }).update(updates);
@@ -107,6 +117,7 @@ export async function remove(id: string): Promise<boolean> {
 function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
   return {
     id: record.id as string,
+    brandId: (record.brand_id as string | undefined) ?? 'default',
     name: record.name as string,
     description: record.description as string | null,
     minSelections: record.min_selections as number,
@@ -133,6 +144,10 @@ function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
       ? DEFAULT_RIDE_MODE
       : record.ride_mode as 'WAVES' | 'LINEAR',
     rideDurationSeconds: record.ride_duration_seconds as number,
+    maxBonusMinor: parseBonusCapMap(record.max_bonus_minor),
+    rewardValiditySeconds: record.reward_validity_seconds === null || record.reward_validity_seconds === undefined
+      ? null
+      : Number(record.reward_validity_seconds),
     isActive: Boolean(record.is_active),
     createdAt: record.created_at as string,
     updatedAt: record.updated_at as string,

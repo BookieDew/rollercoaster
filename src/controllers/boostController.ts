@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { boostQuoteService } from '../services/boostQuoteService';
 import { boostLockService } from '../services/boostLockService';
-import { quoteRequestSchema, lockRequestSchema, betIdParamsSchema } from '../validation/schemas';
+import { quoteRequestSchema, lockRequestSchema, betIdParamsSchema, brandQuerySchema } from '../validation/schemas';
 import { createApiError } from '../middleware/errorHandler';
 import { ReasonCode } from '../types/reasonCodes';
 
@@ -77,8 +77,9 @@ export async function getLock(
 ): Promise<void> {
   try {
     const { betId } = betIdParamsSchema.parse(req.params);
+    const { brand_id: brandId } = brandQuerySchema.parse(req.query);
 
-    const result = await boostLockService.getLockByBetId(betId);
+    const result = await boostLockService.getLockByBetId(brandId, betId);
 
     if (!result.success) {
       throw createApiError(
@@ -93,6 +94,7 @@ export async function getLock(
 
     res.json({
       lock_id: result.data.id,
+      brand_id: result.data.brandId,
       bet_id: result.data.betId,
       reward_id: result.data.rewardId,
       locked_boost_pct: result.data.lockedBoostPct,

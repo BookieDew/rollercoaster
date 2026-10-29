@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { rewardProfileService } from '../services/rewardProfileService';
-import { createRewardProfileSchema, updateRewardProfileSchema, idParamsSchema } from '../validation/schemas';
+import {
+  createRewardProfileSchema,
+  updateRewardProfileSchema,
+  idParamsSchema,
+  optionalBrandQuerySchema,
+} from '../validation/schemas';
 import { toDTO } from '../types/rewardProfile';
 import { createApiError } from '../middleware/errorHandler';
 
@@ -16,6 +21,9 @@ export async function createProfile(
     const validated = createRewardProfileSchema.parse(req.body);
 
     const result = await rewardProfileService.createProfile({
+      brandId: validated.brand_id,
+      maxBonusMinor: validated.max_bonus_minor,
+      rewardValiditySeconds: validated.reward_validity_seconds,
       name: validated.name,
       description: validated.description,
       minSelections: validated.min_selections,
@@ -82,10 +90,11 @@ export async function getAllProfiles(
 ): Promise<void> {
   try {
     const activeOnly = req.query.active === 'true';
+    const { brand_id: brandId } = optionalBrandQuerySchema.parse(req.query);
 
     const result = activeOnly
-      ? await rewardProfileService.getActiveProfiles()
-      : await rewardProfileService.getAllProfiles();
+      ? await rewardProfileService.getActiveProfiles(brandId)
+      : await rewardProfileService.getAllProfiles(brandId);
 
     if (!result.success || !result.data) {
       throw createApiError(
@@ -130,6 +139,8 @@ export async function updateProfile(
       effectiveMinFloorRate: validated.effective_min_floor_rate,
       rideMode: validated.ride_mode,
       rideDurationSeconds: validated.ride_duration_seconds,
+      maxBonusMinor: validated.max_bonus_minor,
+      rewardValiditySeconds: validated.reward_validity_seconds,
       isActive: validated.is_active,
     });
 

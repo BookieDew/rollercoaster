@@ -7,13 +7,17 @@ real time and can crash at any moment. If the bettor stops in time, the boost is
 
 Important: stake and sportsbook odds never change. The reward only adds bonus payout on wins.
 
+One shared back end serves several brands (B2C operators). Profiles, rewards, bets and
+players are all scoped to a brand, so two brands never see or affect each other's data.
+
 ## Core customer flow
 1) User receives a reward token.
 2) User places a qualifying combo bet.
 3) User starts the ride (opt-in).
 4) Boost moves live with no countdown/ETA shown.
 5) User chooses when to stop and lock the current boost.
-6) On win: bonus payout = winnings x locked boost.
+6) On win: bonus payout = total return x locked boost, never more than the profile's bonus cap for the bet's currency. Total return is stake x the product of the leg odds (the stake is included).
+   Example: 10.00 EUR at 5.40 odds returns 54.00 EUR; at a locked 25% boost the bonus is 13.50 EUR.
 7) On loss: bonus payout = 0. A crash or ride end before a successful lock also leaves no bonus; later ride movement cannot change an existing lock.
 
 ## Latest functionality in this version
@@ -38,6 +42,21 @@ Important: stake and sportsbook odds never change. The reward only adds bonus pa
 - The maximum model keeps the true pre-crash WAVES maximum introduced in v2; LINEAR uses that same maximum. Unversioned/v1 rides retain their older checkpoint reference, which can understate values between checkpoints. Saved v2 rides, existing locks, and settlements also retain their original behavior.
 - Active quotes provide current boost and authoritative elapsed sample time, without a future path or crash/end schedule. Completed/locked responses also provide sampled paths and timing offsets.
 - The local demo progressively draws received authoritative boost samples while the ride runs, then freezes the exact stop/terminal result. It retains raw JSON and final outcomes; its chart does not forecast the unobserved path.
+
+## Brands, money, bonus caps and token validity
+- Every profile belongs to one brand and never moves to another. A reward belongs to the brand of the profile it was granted from.
+- Money is whole minor units (cents) plus a currency, for example 10.00 EUR is 1000 EUR-cents. Amounts that need rounding round half up to the nearest cent.
+- The bettor's stake and currency are recorded when the ride starts. The operator sets a **maximum bonus per currency** on the profile; the cap that applies to a bet is copied when its ride starts, so later changes to the profile never alter a bet already in play. A currency the profile has no cap for cannot start a ride.
+- Each profile sets how long a granted token stays usable (**validity**, from 1 minute to 365 days). A token that is not started in time expires; a ride that crashed or ended without a lock also expires, after a grace period (15 minutes by default) during which the player still sees the ride's own crash or end result. A scheduled job (every 5 minutes by default, plus an admin button/endpoint) keeps statuses current, and every change is audited.
+
+## Settlement
+- Only bets whose boost was locked are settled. The sportsbook reports the bet's result (each leg won, lost, pushed or cancelled; or a cash-out; or a cancelled bet). The service works out the payout itself from what was recorded earlier: the stake, the leg odds, the locked boost and the cap. The sportsbook never sends an amount.
+- **Bonus = locked boost x total return**, rounded half up to the cent and limited by the cap. Example: 10.00 EUR on 2.10 x 1.90 x 2.50 returns 99.75 EUR; a 20% locked boost pays a 19.95 EUR bonus.
+- Any lost leg, a cash-out, or all legs pushed: no bonus, the token is used.
+- A **pushed** leg (stake returned on that leg) counts as 1.00 in the return. A push is a normal result, so it never re-opens the eligibility question: the leg keeps its original odds for the minimums. Example: pushing the 1.90 leg returns 52.50 EUR and pays 10.50 EUR.
+- A **cancelled** leg also counts as 1.00, but it is removed, so the profile minimums are checked again on the remaining legs. If they still pass, the bonus is paid on the smaller return; if not, the bet wins **without a bonus** and the token is used. Example (minimum combined odds 5.0): cancelling the 1.90 leg leaves 2.10 x 2.50 = 5.25, so 52.50 EUR returns with a 10.50 EUR bonus; cancelling the 2.50 leg leaves 3.99, so the bet pays 39.90 EUR and no bonus.
+- A fully **cancelled** bet pays no bonus and **returns the token** as a new one with the same expiry date. If that date has already passed, no new token is issued.
+- **Corrections**: the sportsbook can resettle a bet with a reason. Every version is kept, the newest one counts, and the answer says how much the bonus changed (for example -9.45 EUR). If a correction un-cancels a bet, the returned token is withdrawn; if the player has already used it, the correction is refused so nothing is double-paid.
 
 ## Why operators use it
 - Adds a high-intensity moment after bet placement without changing core sportsbook pricing.
@@ -66,6 +85,10 @@ Operators can configure:
   - effective minimum floor rate
 - Ride mode:
   - WAVES or LINEAR
+- Money and lifetime:
+  - brand
+  - maximum bonus per currency
+  - token validity
 
 The current local implementation uses a v3 phase correction for feasible new WAVES
 rides. It targets UP/PEAK/DOWN at 50/20/30 only when enough time and effective boost
@@ -84,9 +107,9 @@ This describes local code, not a production release or an RTP/payout guarantee.
 Curve aesthetics and final acceptance remain separate review items.
 
 ## Risk controls and safeguards
-- Bonus applies only to winnings; bettors never lose extra stake through this feature.
+- Bonus applies only to winning bets; bettors never lose extra stake through this feature.
 - Single-use token behavior prevents repeat claiming of the same reward.
-- Lock and settlement are idempotent for safe sportsbook integration: an identical retry returns the original result, while a conflicting one (another reward or user for the same bet, or a different settlement outcome/amount) is rejected rather than silently accepted. One bet can start only one ride.
+- Lock and settlement are idempotent for safe sportsbook integration: an identical retry returns the original result, while a conflicting one (another reward or user for the same bet, or a different settlement result) is rejected rather than silently accepted; real corrections go through an explicit, audited resettlement. One bet can start only one ride.
 - While a ride is live, players see no countdown, ride length or ride maximum; those are revealed only after the ride ends or the boost is locked. Ride seeds are random and never exposed.
 - Deterministic seeded ride generation supports full replay and dispute handling.
 - HMAC authentication is supported for monetary endpoints.
@@ -101,6 +124,9 @@ Curve aesthetics and final acceptance remain separate review items.
 - Bonus payout rate (bonus paid / bonus locked)
 
 ## Example payout
-Stake $20 at 5.00 odds = $100 winnings
-Locked boost 17.5% -> total payout on win = $117.50
-If the bet loses -> bonus payout = $0
+Stake 20.00 EUR at 5.00 odds = 100.00 EUR total return
+Locked boost 17.5% -> bonus = 17.50 EUR (total payout 117.50 EUR), provided it does not exceed the profile's cap for EUR
+If the cap is 15.00 EUR -> bonus = 15.00 EUR
+If the bet loses -> bonus payout = 0
+
+Push versus cancel: with three legs at 2.00, 1.50 and 1.80 and a 10.00 EUR stake, a pushed third leg counts as 1.00 and the bet still earns a bonus on its 30.00 EUR return; a cancelled third leg is removed and, if only two legs remain below a profile minimum of three, the bet wins with no bonus.

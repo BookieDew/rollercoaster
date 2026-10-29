@@ -9,7 +9,7 @@ import { runInTransaction } from '../../src/db/repositories/transaction';
 import type { LockSnapshot } from '../../src/types/betBoostLock';
 
 async function clearDb(): Promise<void> {
-  await db('settlement_records').del();
+  await db('bet_settlements').del();
   await db('bet_boost_locks').del();
   await db('ride_definitions').del();
   await db('user_rewards').del();
@@ -128,6 +128,9 @@ describe('repository coverage', () => {
   describe('rewardProfileRepository', () => {
     it('handles create/find/update/remove and defaults', async () => {
       const created = await rewardProfileRepository.create({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Repo Test Profile',
         minSelections: 5,
         minCombinedOdds: 10,
@@ -230,13 +233,13 @@ describe('repository coverage', () => {
 
       await expect(runInTransaction(async (tx) => {
         const created = await userRewardRepository.create({
-          userId: 'tx-user', profileVersionId: profileId, startTime: now, endTime: now, seed: 's',
+          brandId: 'brand-a', userId: 'tx-user', profileVersionId: profileId, startTime: now, endTime: now, seed: 's',
         }, tx);
         expect((await userRewardRepository.findById(created.id, tx))?.userId).toBe('tx-user');
         throw new Error('abort');
       })).rejects.toThrow('abort');
 
-      expect(await userRewardRepository.findByUserId('tx-user')).toHaveLength(0);
+      expect(await userRewardRepository.findByUserId('brand-a', 'tx-user')).toHaveLength(0);
     });
   });
 
@@ -274,11 +277,12 @@ describe('repository coverage', () => {
   });
 
   describe('betBoostLockRepository + settlementRepository', () => {
-    it('creates/reads lock records and settlement records', async () => {
+    it('creates/reads lock records and settlement revisions', async () => {
       const fixture1 = await createRewardFixture({ betId: 'repo-bet-1' });
       const fixture2 = await createRewardFixture({ betId: 'repo-bet-2' });
 
       const lock1 = await betBoostLockRepository.create({
+        brandId: 'default',
         betId: fixture1.betId,
         rewardId: fixture1.rewardId,
         lockedBoostPct: 0.2,
@@ -288,6 +292,7 @@ describe('repository coverage', () => {
         snapshot: makeSnapshot(fixture1.profileId),
       });
       const lock2 = await betBoostLockRepository.create({
+        brandId: 'default',
         betId: fixture2.betId,
         rewardId: fixture2.rewardId,
         lockedBoostPct: 0.3,
@@ -297,10 +302,11 @@ describe('repository coverage', () => {
         snapshot: makeSnapshot(fixture2.profileId),
       });
 
-      expect(await betBoostLockRepository.existsByBetId(fixture1.betId)).toBe(true);
-      expect(await betBoostLockRepository.existsByBetId('missing-bet')).toBe(false);
+      expect(await betBoostLockRepository.existsByBetId(fixture1.betId, 'default')).toBe(true);
+      expect(await betBoostLockRepository.existsByBetId(fixture1.betId, 'other-brand')).toBe(false);
+      expect(await betBoostLockRepository.existsByBetId('missing-bet', 'default')).toBe(false);
 
-      const byBet = await betBoostLockRepository.findByBetId(fixture1.betId);
+      const byBet = await betBoostLockRepository.findByBetId(fixture1.betId, 'default');
       expect(byBet?.id).toBe(lock1.id);
 
       const byId = await betBoostLockRepository.findById(lock1.id);
@@ -310,33 +316,77 @@ describe('repository coverage', () => {
       expect(byReward).toHaveLength(1);
       expect(byReward[0].id).toBe(lock2.id);
 
-      const settlement1 = await settlementRepository.create({
+      const base = {
+        brandId: 'default',
         betId: fixture1.betId,
-        outcome: 'WIN',
-        winnings: 100,
-        bonusAmount: 20,
+        lockId: lock1.id,
+        outcome: 'SETTLED' as const,
+        legs: [{ selection_id: 'a', result: 'WON' as const }],
+        currency: 'EUR',
+        stakeMinor: 1000,
+        lockedBoostPct: 0.2,
+        bonusCapMinor: 50_000,
+        replacementRewardId: null,
+        reason: null,
+        settledAt: new Date().toISOString(),
+      };
+      const first = await settlementRepository.create({
+        ...base,
+        id: uuidv4(),
+        revision: 1,
+        betResult: 'WON',
+        totalReturnMinor: '9975',
+        bonusMinor: 1995,
+        capApplied: false,
+        minimumsMet: null,
       });
-      const settlement2 = await settlementRepository.create({
-        betId: fixture2.betId,
-        outcome: 'LOSS',
-        winnings: 0,
-        bonusAmount: 0,
+      expect(first).toMatchObject({ revision: 1, isCurrent: true, bonusMinor: 1995, minimumsMet: null });
+
+      const read = await settlementRepository.findCurrentByLockId(lock1.id);
+      expect(read).toMatchObject({
+        id: first.id, isCurrent: true, legs: base.legs, totalReturnMinor: '9975', capApplied: false, minimumsMet: null,
       });
+      expect((await settlementRepository.findCurrentByBet('default', fixture1.betId))?.id).toBe(first.id);
+      expect(await settlementRepository.findCurrentByBet('other-brand', fixture1.betId)).toBeNull();
 
-      expect((await settlementRepository.findByBetId(fixture1.betId))?.id).toBe(settlement1.id);
-      expect((await settlementRepository.findById(settlement2.id))?.betId).toBe(fixture2.betId);
-      expect(await settlementRepository.findByBetId('missing-bet')).toBeNull();
+      // A second current revision for the same lock is refused by the partial unique index.
+      await expect(settlementRepository.create({
+        ...base, id: uuidv4(), revision: 2, betResult: 'LOST', totalReturnMinor: '0', bonusMinor: 0,
+        capApplied: false, minimumsMet: null,
+      })).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT' });
 
-      expect(await settlementRepository.existsByBetId(fixture1.betId)).toBe(true);
-      expect(await settlementRepository.existsByBetId('missing-bet')).toBe(false);
+      const second = await runInTransaction(async (tx) => {
+        expect(await settlementRepository.markSuperseded(first.id, tx)).toBe(true);
+        expect(await settlementRepository.markSuperseded(first.id, tx)).toBe(false);
+        return settlementRepository.create({
+          ...base, id: uuidv4(), revision: 2, outcome: 'CANCELLED', legs: null, betResult: 'CANCELLED',
+          totalReturnMinor: null, bonusMinor: 0, capApplied: false, minimumsMet: true,
+          replacementRewardId: fixture2.rewardId, reason: 'void',
+        }, tx);
+      });
+      const current = await settlementRepository.findCurrentByLockId(lock1.id);
+      expect(current).toMatchObject({
+        id: second.id, revision: 2, legs: null, totalReturnMinor: null, minimumsMet: true,
+        replacementRewardId: fixture2.rewardId, reason: 'void',
+      });
+      expect((await settlementRepository.findRevision(lock1.id, 1))?.isCurrent).toBe(false);
+      expect(await settlementRepository.findRevision(lock1.id, 3)).toBeNull();
+      expect((await settlementRepository.findAllByLockId(lock1.id)).map((row) => row.revision)).toEqual([1, 2]);
+      expect(await settlementRepository.findCurrentByLockId(lock2.id)).toBeNull();
 
-      const start = new Date(Date.now() - 60_000).toISOString();
-      const end = new Date(Date.now() + 60_000).toISOString();
-      const inRange = await settlementRepository.findByDateRange(start, end);
-      expect(inRange.length).toBeGreaterThanOrEqual(2);
+      // total_return_minor is stored exactly as text, whatever its size (100 legs at 10,000 on 1e12).
+      const huge = `1${'0'.repeat(412)}`;
+      const big = await settlementRepository.create({
+        ...base, id: uuidv4(), betId: fixture2.betId, lockId: lock2.id, revision: 1, betResult: 'WON',
+        totalReturnMinor: huge, bonusMinor: 50_000, capApplied: true, minimumsMet: null,
+      });
+      expect(big.totalReturnMinor).toBe(huge);
+      expect((await settlementRepository.findCurrentByLockId(lock2.id))?.totalReturnMinor).toBe(huge);
+      expect((await db('bet_settlements').where({ id: big.id }).first()).total_return_minor).toBe(huge);
 
-      expect(await settlementRepository.sumBonusByOutcome('WIN')).toBe(20);
-      expect(await settlementRepository.sumBonusByOutcome('CASHOUT')).toBe(0);
+      // A stored value that is not an exact non-negative integer is rejected, never rounded.
+      await db('bet_settlements').where({ id: big.id }).update({ total_return_minor: '1.5' });
+      await expect(settlementRepository.findCurrentByLockId(lock2.id)).rejects.toThrow(/not an exact non-negative integer/);
     });
   });
 });

@@ -29,10 +29,10 @@ describe('API contract: validation, error codes and routing', () => {
       ['GET', '/api/profiles/not-a-uuid'],
       ['PUT', '/api/profiles/not-a-uuid'],
       ['DELETE', '/api/profiles/not-a-uuid'],
-      ['GET', `/api/rewards/user/${LONG_ID}`],
-      ['GET', `/api/rewards/user/${LONG_ID}/active`],
-      ['GET', `/api/boost/lock/${LONG_ID}`],
-      ['GET', `/api/settlement/${LONG_ID}`],
+      ['GET', `/api/rewards/user/${LONG_ID}?brand_id=brand-a`],
+      ['GET', `/api/rewards/user/${LONG_ID}/active?brand_id=brand-a`],
+      ['GET', `/api/boost/lock/${LONG_ID}?brand_id=brand-a`],
+      ['GET', `/api/settlement/${LONG_ID}?brand_id=brand-a`],
     ])('%s %s -> 400 VALIDATION_ERROR', async (method, path) => {
       const agent = request(app);
       const req = method === 'GET' ? agent.get(path)
@@ -46,9 +46,9 @@ describe('API contract: validation, error codes and routing', () => {
 
     it('accepts 255-character user and bet IDs', async () => {
       const id255 = 'y'.repeat(255);
-      const rewards = await request(app).get(`/api/rewards/user/${id255}`).set('X-API-Key', API_KEY);
+      const rewards = await request(app).get(`/api/rewards/user/${id255}?brand_id=brand-a`).set('X-API-Key', API_KEY);
       expect(rewards.status).toBe(200);
-      const lock = await request(app).get(`/api/boost/lock/${id255}`).set('X-API-Key', API_KEY);
+      const lock = await request(app).get(`/api/boost/lock/${id255}?brand_id=brand-a`).set('X-API-Key', API_KEY);
       expect(lock.status).toBe(404);
       expect(lock.body.code).toBe(ReasonCode.LOCK_NOT_FOUND);
     });
@@ -56,19 +56,24 @@ describe('API contract: validation, error codes and routing', () => {
 
   describe('body bounds', () => {
     const selections = [{ id: 's1', odds: 2 }, { id: 's2', odds: 2 }, { id: 's3', odds: 2 }];
+    const MONEY = { stake_minor: 1000, currency: 'EUR' };
 
     it.each([
-      ['user_id over 255', { user_id: LONG_ID, bet_id: 'b', ticket: { selections } }],
-      ['bet_id over 255', { user_id: 'u', bet_id: LONG_ID, ticket: { selections } }],
-      ['selection id over 255', { user_id: 'u', bet_id: 'b', ticket: { selections: [{ id: LONG_ID, odds: 2 }] } }],
-      ['selection name over 255', { user_id: 'u', bet_id: 'b', ticket: { selections: [{ id: 's', odds: 2, name: LONG_ID }] } }],
-      ['selection market over 255', { user_id: 'u', bet_id: 'b', ticket: { selections: [{ id: 's', odds: 2, market: LONG_ID }] } }],
-      ['selection event over 255', { user_id: 'u', bet_id: 'b', ticket: { selections: [{ id: 's', odds: 2, event: LONG_ID }] } }],
-      ['odds over 10,000', { user_id: 'u', bet_id: 'b', ticket: { selections: [{ id: 's', odds: 10000.01 }] } }],
+      ['user_id over 255', { user_id: LONG_ID, bet_id: 'b', ...MONEY, ticket: { selections } }],
+      ['bet_id over 255', { user_id: 'u', bet_id: LONG_ID, ...MONEY, ticket: { selections } }],
+      ['selection id over 255', { user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [{ id: LONG_ID, odds: 2 }] } }],
+      ['selection name over 255', { user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [{ id: 's', odds: 2, name: LONG_ID }] } }],
+      ['selection market over 255', { user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [{ id: 's', odds: 2, market: LONG_ID }] } }],
+      ['selection event over 255', { user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [{ id: 's', odds: 2, event: LONG_ID }] } }],
+      ['odds over 10,000', { user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [{ id: 's', odds: 10000.01 }] } }],
       ['more than 100 selections', {
         user_id: 'u',
         bet_id: 'b',
+        ...MONEY,
         ticket: { selections: Array.from({ length: 101 }, (_, i) => ({ id: `s${i}`, odds: 1.5 })) },
+      }],
+      ['duplicate selection ids', {
+        user_id: 'u', bet_id: 'b', ...MONEY, ticket: { selections: [...selections, { id: 's2', odds: 3 }] },
       }],
     ])('opt-in rejects %s with 400', async (_label, body) => {
       const res = await request(app)
@@ -84,7 +89,8 @@ describe('API contract: validation, error codes and routing', () => {
         ['/api/rewards', { user_id: LONG_ID, profile_version_id: VALID_UUID }],
         ['/api/boost/quote', { user_id: 'u', reward_id: VALID_UUID, bet_id: LONG_ID }],
         ['/api/boost/lock', { user_id: LONG_ID, reward_id: VALID_UUID, bet_id: 'b' }],
-        ['/api/settlement', { bet_id: LONG_ID, outcome: 'WIN', winnings: 1 }],
+        ['/api/settlement', { brand_id: 'brand-a', bet_id: LONG_ID, outcome: 'CASHOUT' }],
+        ['/api/settlement/resettle', { brand_id: 'brand-a', bet_id: LONG_ID, outcome: 'CASHOUT', reason: 'r' }],
       ];
       for (const [path, body] of cases) {
         const res = await request(app).post(path).set('X-API-Key', API_KEY).send(body);
@@ -114,11 +120,11 @@ describe('API contract: validation, error codes and routing', () => {
     });
 
     it('returns coded 404s for missing lock and settlement', async () => {
-      const lock = await request(app).get('/api/boost/lock/missing-bet').set('X-API-Key', API_KEY);
+      const lock = await request(app).get('/api/boost/lock/missing-bet?brand_id=brand-a').set('X-API-Key', API_KEY);
       expect(lock.status).toBe(404);
       expect(lock.body).toMatchObject({ error: 'Not Found', code: ReasonCode.LOCK_NOT_FOUND });
 
-      const settlement = await request(app).get('/api/settlement/missing-bet').set('X-API-Key', API_KEY);
+      const settlement = await request(app).get('/api/settlement/missing-bet?brand_id=brand-a').set('X-API-Key', API_KEY);
       expect(settlement.status).toBe(404);
       expect(settlement.body).toMatchObject({ error: 'Not Found', code: ReasonCode.SETTLEMENT_NOT_FOUND });
     });
@@ -155,7 +161,7 @@ describe('API contract: validation, error codes and routing', () => {
       process.env.NODE_ENV = env;
       let res: request.Response;
       try {
-        res = await request(app).get('/api/rewards/user/leak-user').set('X-API-Key', API_KEY);
+        res = await request(app).get('/api/rewards/user/leak-user?brand_id=brand-a').set('X-API-Key', API_KEY);
       } finally {
         process.env.NODE_ENV = previousEnv;
       }

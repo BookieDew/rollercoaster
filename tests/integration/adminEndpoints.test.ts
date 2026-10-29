@@ -31,6 +31,9 @@ describe('Admin Endpoints Integration Tests', () => {
         effective_min_floor_rate: 0.35,
         ride_mode: 'WAVES',
         ride_duration_seconds: 300,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
 
     expect(res.status).toBe(201);
@@ -46,7 +49,7 @@ describe('Admin Endpoints Integration Tests', () => {
   });
 
   beforeEach(async () => {
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -63,6 +66,9 @@ describe('Admin Endpoints Integration Tests', () => {
       min_boost_pct: 0.05,
       max_boost_pct: 0.5,
       ride_duration_seconds: 120,
+      brand_id: 'brand-a',
+      max_bonus_minor: { EUR: 50_000 },
+      reward_validity_seconds: 86_400,
     };
     const timestamp = Date.now().toString();
     const signature = sign('POST', '/api/profiles', payload, timestamp);
@@ -134,6 +140,9 @@ describe('Admin Endpoints Integration Tests', () => {
         min_boost_pct: 0.9,
         max_boost_pct: 0.1,
         ride_duration_seconds: 300,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
 
     expect(createRes.status).toBe(400);

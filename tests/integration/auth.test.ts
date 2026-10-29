@@ -29,7 +29,7 @@ describe('HMAC Authentication', () => {
   });
 
   beforeEach(async () => {
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -47,6 +47,9 @@ describe('HMAC Authentication', () => {
         min_boost_pct: 0.05,
         max_boost_pct: 0.5,
         ride_duration_seconds: 15,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
 
     expect(profileRes.status).toBe(201);

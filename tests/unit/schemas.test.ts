@@ -8,7 +8,8 @@ import {
   MAX_IDENTIFIER_LENGTH,
   MAX_SELECTION_ODDS,
   MAX_SELECTIONS,
-  MAX_WINNINGS,
+  resettlementRequestSchema,
+  startRideSchema,
 } from '../../src/validation/schemas';
 
 describe('validation schemas', () => {
@@ -16,13 +17,49 @@ describe('validation schemas', () => {
     const atLimit = 'a'.repeat(MAX_IDENTIFIER_LENGTH);
     const overLimit = 'a'.repeat(MAX_IDENTIFIER_LENGTH + 1);
 
-    it('bounds settlement winnings to finite values in [0, MAX_WINNINGS]', () => {
-      const base = { bet_id: 'b', outcome: 'WIN' as const };
-      expect(settlementRequestSchema.safeParse({ ...base, winnings: 0 }).success).toBe(true);
-      expect(settlementRequestSchema.safeParse({ ...base, winnings: MAX_WINNINGS }).success).toBe(true);
-      for (const winnings of [Infinity, -Infinity, NaN, 1e300, MAX_WINNINGS + 0.01, -0.01]) {
-        expect(settlementRequestSchema.safeParse({ ...base, winnings }).success).toBe(false);
+    it('validates the settlement body: brand, outcome, and legs only (and always) for SETTLED', () => {
+      const base = { brand_id: 'brand-a', bet_id: 'b' };
+      const legs = [{ selection_id: 's1', result: 'WON' }];
+      expect(settlementRequestSchema.safeParse({ ...base, outcome: 'SETTLED', legs }).success).toBe(true);
+      expect(settlementRequestSchema.safeParse({ ...base, outcome: 'CASHOUT' }).success).toBe(true);
+      expect(settlementRequestSchema.safeParse({ ...base, outcome: 'CANCELLED' }).success).toBe(true);
+
+      for (const invalid of [
+        { ...base, outcome: 'SETTLED' },
+        { ...base, outcome: 'SETTLED', legs: [] },
+        { ...base, outcome: 'CASHOUT', legs },
+        { ...base, outcome: 'CANCELLED', legs: [] },
+        { ...base, outcome: 'WIN', winnings: 1 },
+        { bet_id: 'b', outcome: 'CASHOUT' },
+        { ...base, brand_id: 'bad brand', outcome: 'CASHOUT' },
+        { ...base, outcome: 'SETTLED', legs: [{ selection_id: 's1', result: 'VOID' }] },
+        { ...base, outcome: 'SETTLED', legs: [{ selection_id: '', result: 'WON' }] },
+        { ...base, outcome: 'SETTLED', legs: Array.from({ length: MAX_SELECTIONS + 1 }, (_, i) => ({ selection_id: `s${i}`, result: 'WON' })) },
+      ]) {
+        expect(settlementRequestSchema.safeParse(invalid).success).toBe(false);
       }
+
+      expect(resettlementRequestSchema.safeParse({ ...base, outcome: 'CASHOUT', reason: 'x' }).success).toBe(true);
+      expect(resettlementRequestSchema.safeParse({ ...base, outcome: 'CASHOUT', reason: 'x'.repeat(500) }).success).toBe(true);
+      for (const reason of [undefined, '', '   ', 'x'.repeat(501)]) {
+        expect(resettlementRequestSchema.safeParse({ ...base, outcome: 'CASHOUT', reason }).success).toBe(false);
+      }
+      expect(resettlementRequestSchema.safeParse({ ...base, outcome: 'SETTLED', reason: 'x' }).success).toBe(false);
+    });
+
+    it('requires unique selection ids on the opt-in ticket', () => {
+      const body = {
+        user_id: 'u', bet_id: 'b', stake_minor: 1000, currency: 'EUR',
+        ticket: { selections: [{ id: 's1', odds: 2 }, { id: 's2', odds: 2 }] },
+      };
+      expect(startRideSchema.safeParse(body).success).toBe(true);
+      const duplicate = startRideSchema.safeParse({
+        ...body,
+        ticket: { selections: [...body.ticket.selections, { id: 's1', odds: 3, selection_type: 'SGP_LEG', sgp_group_id: 'g' }] },
+      });
+      expect(duplicate.success).toBe(false);
+      expect(duplicate.success ? [] : duplicate.error.issues.map((issue) => issue.path.join('.')))
+        .toEqual(['ticket.selections.2.id']);
     });
 
     it('requires UUID ids and 1-255 character user and bet path params', () => {
@@ -46,6 +83,12 @@ describe('validation schemas', () => {
 
       expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: MAX_SELECTION_ODDS }] }).success).toBe(true);
       expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: MAX_SELECTION_ODDS + 0.01 }] }).success).toBe(false);
+      for (const extra of [{}, { selection_type: 'SGP_LEG', sgp_group_id: 'g' }, { selection_type: 'SGP_COMPOSITE', sgp_group_id: 'g' }]) {
+        expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: 2.123456, ...extra }] }).success).toBe(true);
+        expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: 2.1234567, ...extra }] }).success).toBe(false);
+      }
+      expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: 1e-7 }] }).success).toBe(false);
+      expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: 1e-6 }] }).success).toBe(true);
       for (const field of ['id', 'name', 'market', 'event']) {
         expect(ticketSchema.safeParse({ selections: [{ id: 's', odds: 2, [field]: overLimit }] }).success).toBe(false);
       }

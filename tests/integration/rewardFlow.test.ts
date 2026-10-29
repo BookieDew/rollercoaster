@@ -16,7 +16,7 @@ describe('Reward Flow Integration Tests', () => {
 
   beforeEach(async () => {
     // Clean up tables before each test
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -39,6 +39,9 @@ describe('Reward Flow Integration Tests', () => {
           min_boost_pct: 0.05,
           max_boost_pct: 0.5,
           ride_duration_seconds: 3600,
+          brand_id: 'brand-a',
+          max_bonus_minor: { EUR: 50_000 },
+          reward_validity_seconds: 86_400,
         });
 
       expect(profileRes.status).toBe(201);
@@ -65,6 +68,8 @@ describe('Reward Flow Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'user-123',
           bet_id: 'bet-456',
           ticket: {
@@ -111,21 +116,40 @@ describe('Reward Flow Integration Tests', () => {
       expect(lockRes.body.locked_boost_pct).toBeGreaterThan(0);
       const lockedBoostPct = lockRes.body.locked_boost_pct;
 
-      // Step 6: Settle the bet as a win
+      // Step 6: Settle the bet as a win: bonus = locked boost x total return, in minor units
       const settleRes = await request(app)
         .post('/api/settlement')
         .set('X-API-Key', API_KEY)
         .send({
+          brand_id: 'brand-a',
           bet_id: 'bet-456',
-          outcome: 'WIN',
-          winnings: 100,
+          outcome: 'SETTLED',
+          legs: ['s1', 's2', 's3', 's4'].map((id) => ({ selection_id: id, result: 'WON' })),
         });
 
       expect(settleRes.status).toBe(201);
-      expect(settleRes.body.outcome).toBe('WIN');
-      expect(settleRes.body.winnings).toBe(100);
-      expect(settleRes.body.locked_boost_pct).toBe(lockedBoostPct);
-      expect(settleRes.body.bonus_amount).toBeCloseTo(100 * lockedBoostPct, 2);
+      // 10.00 EUR at 1.5 x 2.0 x 1.8 x 2.5 = 13.5 returns 135.00 EUR.
+      const scaledBoost = BigInt(Math.round(lockedBoostPct * 1e6));
+      const expectedBonus = Number((2n * 13_500n * scaledBoost + 1_000_000n) / 2_000_000n);
+      expect(settleRes.body).toMatchObject({
+        brand_id: 'brand-a',
+        bet_id: 'bet-456',
+        lock_id: lockRes.body.lock_id,
+        revision: 1,
+        outcome: 'SETTLED',
+        bet_result: 'WON',
+        currency: 'EUR',
+        stake_minor: 1000,
+        total_return_minor: '13500',
+        locked_boost_pct: lockedBoostPct,
+        bonus_minor: expectedBonus,
+        bonus_cap_minor: 50_000,
+        cap_applied: false,
+        minimums_met: null,
+        replacement_reward_id: null,
+        replacement_status: null,
+      });
+      expect(Number.isInteger(settleRes.body.bonus_minor)).toBe(true);
     });
 
     it('should handle loss settlement with zero bonus', async () => {
@@ -141,6 +165,9 @@ describe('Reward Flow Integration Tests', () => {
           min_boost_pct: 0.05,
           max_boost_pct: 0.5,
           ride_duration_seconds: 3600,
+          brand_id: 'brand-a',
+          max_bonus_minor: { EUR: 50_000 },
+          reward_validity_seconds: 86_400,
         });
 
       const profileId = profileRes.body.id;
@@ -159,6 +186,8 @@ describe('Reward Flow Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'user-loss',
           bet_id: 'bet-loss',
           ticket: {
@@ -179,19 +208,25 @@ describe('Reward Flow Integration Tests', () => {
           bet_id: 'bet-loss',
         });
 
-      // Settle as loss
+      // Settle as loss: one LOST leg loses the bet
       const settleRes = await request(app)
         .post('/api/settlement')
         .set('X-API-Key', API_KEY)
         .send({
+          brand_id: 'brand-a',
           bet_id: 'bet-loss',
-          outcome: 'LOSS',
-          winnings: 0,
+          outcome: 'SETTLED',
+          legs: [
+            { selection_id: 's1', result: 'WON' },
+            { selection_id: 's2', result: 'LOST' },
+            { selection_id: 's3', result: 'WON' },
+          ],
         });
 
       expect(settleRes.status).toBe(201);
-      expect(settleRes.body.outcome).toBe('LOSS');
-      expect(settleRes.body.bonus_amount).toBe(0);
+      expect(settleRes.body.bet_result).toBe('LOST');
+      expect(settleRes.body.total_return_minor).toBe('0');
+      expect(settleRes.body.bonus_minor).toBe(0);
     });
   });
 });

@@ -1,8 +1,8 @@
-import { userRewardRepository, BetAlreadyBoundError } from '../db/repositories/userRewardRepository';
+import { userRewardRepository, BetAlreadyBoundError, type OptInMoney } from '../db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
 import { rideDefinitionRepository } from '../db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
-import { runInTransaction, Rollback } from '../db/repositories/transaction';
+import { runInTransaction, Rollback, isUniqueViolation } from '../db/repositories/transaction';
 import {
   deriveRideParams,
   deriveRideDurationSeconds,
@@ -18,8 +18,10 @@ import {
 import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
+import { LEGACY_BRAND_ID } from '../types/brand';
 import { config } from '../config';
 import { createRideMathSnapshot, resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
+import { expireGrantedReward } from './rewardExpiryService';
 
 export interface ServiceResult<T> {
   success: boolean;
@@ -38,6 +40,15 @@ export interface OptInResult {
 export interface OptInInput {
   userId: string;
   betId: string;
+  /**
+   * Stake in integer minor units (e.g. 1000 = 10.00) and ISO-4217 currency. The
+   * HTTP schema requires both; they are optional here only for internal callers
+   * that predate Phase 1a. When both are given, the currency must be a key of
+   * the profile's max_bonus_minor map and the stake/currency/cap are frozen on
+   * the reward.
+   */
+  stakeMinor?: number;
+  currency?: string;
   selections: Selection[];
 }
 
@@ -67,6 +78,11 @@ function buildEligibilityResponse(
   };
 }
 
+/** True once the reward's validity window has elapsed (legacy rewards never expire). */
+function isPastValidity(reward: UserReward, now: Date): boolean {
+  return reward.validUntil != null && now.getTime() > new Date(reward.validUntil).getTime();
+}
+
 export async function precheckEligibility(
   rewardId: string,
   userId: string,
@@ -88,6 +104,10 @@ export async function precheckEligibility(
 
   if (reward.status === 'ENTERED') {
     return { success: true, data: buildEligibilityResponse(ReasonCode.ALREADY_OPTED_IN, selections.length, 0, 0, null) };
+  }
+
+  if (isPastValidity(reward, new Date())) {
+    return { success: true, data: buildEligibilityResponse(ReasonCode.REWARD_EXPIRED, selections.length, 0, 0, null) };
   }
 
   const profile = await rewardProfileRepository.findById(reward.profileVersionId);
@@ -154,7 +174,7 @@ export async function optIn(
   rewardId: string,
   input: OptInInput
 ): Promise<ServiceResult<OptInResult>> {
-  const { userId, betId, selections } = input;
+  const { userId, betId, stakeMinor, currency, selections } = input;
   // Fetch the reward
   const reward = await userRewardRepository.findById(rewardId);
 
@@ -211,6 +231,12 @@ export async function optIn(
     };
   }
 
+  // Validity: a reward opted into after valid_until is expired (conditionally, with audit).
+  if (isPastValidity(reward, new Date())) {
+    await expireGrantedReward(reward, new Date(), 'OPT_IN');
+    return failure(ReasonCode.REWARD_EXPIRED, 'Reward has expired');
+  }
+
   // Get the profile to generate ride checkpoints
   const profile = await rewardProfileRepository.findById(reward.profileVersionId);
   if (!profile) {
@@ -221,6 +247,20 @@ export async function optIn(
         message: 'Associated profile not found',
       },
     };
+  }
+
+  // The bonus cap is copied from the profile now, so later profile edits never
+  // change an in-flight bet.
+  let money: OptInMoney | undefined;
+  if (stakeMinor !== undefined && currency !== undefined) {
+    const bonusCapMinor = profile.maxBonusMinor?.[currency];
+    if (bonusCapMinor === undefined) {
+      return failure(
+        ReasonCode.CURRENCY_NOT_SUPPORTED,
+        `Currency ${currency} is not supported by this reward profile`
+      );
+    }
+    money = { stakeMinor, currency, bonusCapMinor };
   }
 
   // Validate eligibility based on ticket (bet already placed)
@@ -321,7 +361,8 @@ export async function optIn(
         endTime,
         betId,
         ticketSnapshot,
-        tx
+        tx,
+        money
       );
       if (!enteredReward) {
         throw new Rollback(failure(ReasonCode.INTERNAL_ERROR, 'Failed to start ride'));
@@ -334,8 +375,12 @@ export async function optIn(
         entityId: rewardId,
         action: 'OPT_IN',
         payload: {
+          brandId: reward.brandId ?? LEGACY_BRAND_ID,
           userId,
           betId,
+          stakeMinor: money?.stakeMinor,
+          currency: money?.currency,
+          bonusCapMinor: money?.bonusCapMinor,
           optedInAt,
           checkpointCount: ride.checkpoints.length,
           volatility: derived.volatility,
@@ -359,11 +404,19 @@ export async function optIn(
       };
     });
   } catch (error) {
-    if (error instanceof BetAlreadyBoundError) {
+    // The application check and the unique (brand_id, bet_id) index both mean 409.
+    if (error instanceof BetAlreadyBoundError || isBetBindingViolation(error)) {
       return failure(ReasonCode.BET_ALREADY_BOUND, 'Bet is already bound to a different reward');
     }
     throw error;
   }
+}
+
+/** A unique violation on user_rewards (brand_id, bet_id) from SQLite or PostgreSQL. */
+function isBetBindingViolation(error: unknown): boolean {
+  if (!isUniqueViolation(error)) return false;
+  const message = String((error as { message?: unknown }).message ?? '');
+  return /user_rewards/.test(message) && /bet_id/.test(message);
 }
 
 function failure<T>(code: ReasonCode, message: string): ServiceResult<T> {

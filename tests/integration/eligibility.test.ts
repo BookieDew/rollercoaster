@@ -22,7 +22,7 @@ describe('Eligibility Integration Tests', () => {
 
   beforeEach(async () => {
     // Clean up tables
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -41,6 +41,9 @@ describe('Eligibility Integration Tests', () => {
         min_boost_pct: 0.05,
         max_boost_pct: 0.5,
         ride_duration_seconds: 3600,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
     profileId = profileRes.body.id;
 
@@ -61,6 +64,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-min-selections',
           ticket: {
@@ -81,6 +86,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-min-odds',
           ticket: {
@@ -146,6 +153,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-min-combined',
           ticket: {
@@ -264,6 +273,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-already-opted',
           ticket: {
@@ -279,6 +290,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-already-opted',
           ticket: {
@@ -299,6 +312,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'used-bet',
           ticket: {
@@ -345,6 +360,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'ride-ended-bet',
           ticket: {
@@ -390,6 +407,8 @@ describe('Eligibility Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'eligibility-user',
           bet_id: 'bet-eligible',
           ticket: {

@@ -11,6 +11,7 @@ export async function create(input: CreateBetBoostLockInput, tx?: TransactionSco
 
   const record = {
     id,
+    brand_id: input.brandId,
     bet_id: input.betId,
     reward_id: input.rewardId,
     locked_boost_pct: input.lockedBoostPct,
@@ -27,8 +28,9 @@ export async function create(input: CreateBetBoostLockInput, tx?: TransactionSco
   return mapToEntity(record);
 }
 
-export async function findByBetId(betId: string): Promise<BetBoostLock | null> {
-  const record = await db(TABLE).where({ bet_id: betId }).first();
+/** A bet is identified by (brand_id, bet_id); unique(brand_id, bet_id) backs one lock per bet. */
+export async function findByBetId(betId: string, brandId: string): Promise<BetBoostLock | null> {
+  const record = await db(TABLE).where({ brand_id: brandId, bet_id: betId }).first();
   return record ? mapToEntity(record) : null;
 }
 
@@ -42,9 +44,8 @@ export async function findByRewardId(rewardId: string): Promise<BetBoostLock[]> 
   return records.map(mapToEntity);
 }
 
-export async function existsByBetId(betId: string): Promise<boolean> {
-  const record = await db(TABLE).where({ bet_id: betId }).first();
-  return !!record;
+export async function existsByBetId(betId: string, brandId: string): Promise<boolean> {
+  return !!(await findByBetId(betId, brandId));
 }
 
 function mapToEntity(record: Record<string, unknown>): BetBoostLock {
@@ -54,6 +55,7 @@ function mapToEntity(record: Record<string, unknown>): BetBoostLock {
 
   return {
     id: record.id as string,
+    brandId: (record.brand_id as string | undefined) ?? 'default',
     betId: record.bet_id as string,
     rewardId: record.reward_id as string,
     lockedBoostPct: Number(record.locked_boost_pct),

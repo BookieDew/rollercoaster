@@ -40,6 +40,15 @@ export interface Config {
     /** Serve the local demo UI at /demo. */
     demoUiEnabled: boolean;
   };
+  rewards: {
+    /** Seconds between in-process expiry runs; 0 disables the interval. */
+    expiryIntervalSeconds: number;
+    /**
+     * Seconds an unlocked ride must have been over (crashed or ended) before the
+     * expiry job moves its ENTERED reward to EXPIRED.
+     */
+    rideExpiryGraceSeconds: number;
+  };
 }
 
 /** Development/test API key; it is pre-filled in the demo and refused in production. */
@@ -259,6 +268,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     issues, 'DEMO_UI_ENABLED', env.DEMO_UI_ENABLED ?? String(nodeEnv !== 'production'), booleanFlag
   );
 
+  // setInterval cannot wait longer than 2^31-1 ms.
+  const expiryIntervalSeconds = parseVar(
+    issues, 'REWARD_EXPIRY_INTERVAL_SECONDS', env.REWARD_EXPIRY_INTERVAL_SECONDS ?? '300', wholeNumber(0, 2_147_483)
+  );
+
+  // Up to 365 days, the longest reward validity.
+  const rideExpiryGraceSeconds = parseVar(
+    issues, 'RIDE_EXPIRY_GRACE_SECONDS', env.RIDE_EXPIRY_GRACE_SECONDS ?? '900', wholeNumber(0, 31_536_000)
+  );
+
   if (issues.length > 0) {
     throw new ConfigError(issues);
   }
@@ -288,6 +307,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       port: port!,
       env: nodeEnv!,
       demoUiEnabled: demoUiEnabled!,
+    },
+    rewards: {
+      expiryIntervalSeconds: expiryIntervalSeconds!,
+      rideExpiryGraceSeconds: rideExpiryGraceSeconds!,
     },
   };
 }

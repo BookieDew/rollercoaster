@@ -56,6 +56,62 @@ for configuration.
 
 ---
 
+## Brands, money and validity
+
+One shared back end serves several brands (B2C operators).
+
+- `brand_id` is 1-64 characters of letters, digits, underscore or hyphen.
+- A **profile belongs to one brand**: `brand_id` is required when creating it and
+  can never be changed (a `brand_id` in a profile update is 400).
+- A **reward inherits the brand of its profile** when it is granted.
+- A **player is `(brand_id, user_id)`** and a **bet is `(brand_id, bet_id)`**. The
+  same `bet_id` may exist in two brands; inside one brand a second reward bound to
+  it gets 409 `BET_ALREADY_BOUND`. A database unique index on user rewards
+  `(brand_id, bet_id)` backs this check, and a violation of it is also 409, never 500.
+- `GET /api/rewards/user/:userId`, `GET /api/rewards/user/:userId/active`,
+  `GET /api/boost/lock/:betId` and `GET /api/settlement/:betId` **require the query
+  parameter `brand_id`**; a missing or malformed value is 400 `VALIDATION_ERROR`,
+  and results never cross brands. Quote, lock and opt-in keep their bodies: the
+  brand comes from the reward. Settle and resettle carry `brand_id` in the body.
+- Locks are unique per `(brand_id, bet_id)` too, so two brands can each lock and
+  settle their own `bet-789` independently.
+- Rows created before brands existed belong to brand `default`.
+
+**Money** is an integer number of minor units plus a currency code
+(`^[A-Z]{3}$`, e.g. `EUR`). Floating-point money is never used. `stake_minor`
+`1000` with currency `EUR` means 10.00 EUR. Derived amounts round **half-up** to
+the nearest minor unit (2.5 becomes 3, 2.49 becomes 2).
+
+**Bonus cap and validity** are profile settings:
+- `max_bonus_minor`: object mapping a currency to a positive integer cap, at least
+  one entry (for example `{ "EUR": 50000, "USD": 55000 }`).
+- `reward_validity_seconds`: integer from 60 to 31,536,000 (365 days).
+
+Both can be updated with `PUT /api/profiles/:id`; an update affects **future
+grants and opt-ins only**. The stake, currency and cap are copied onto the reward
+at opt-in, so editing a profile never changes a bet already in flight. A reward is
+usable until `valid_until = granted_at + reward_validity_seconds`; legacy rewards
+have `valid_until: null` and never expire. A legacy profile has no caps (`{}`), so
+it needs a `PUT` with `max_bonus_minor` before it can accept new opt-ins.
+
+### Worked examples (bonus = locked boost x total return)
+
+Stake 10.00 EUR (`stake_minor` 1000), cap 500.00 EUR (`bonus_cap_minor` 50000):
+
+| Case | Total return | Locked boost | Calculation | Bonus |
+|------|-------------|--------------|-------------|-------|
+| Three-leg win at 2.00 x 1.50 x 1.80 | 54.00 EUR (5400) | 25% | 5400 x 0.25 = 1350 | 13.50 EUR |
+| Cap applies: stake 100.00, odds product 12.00 | 1200.00 EUR (120000) | 50% | 60000 capped at 50000 | 500.00 EUR (`cap_applied`) |
+| Half-up rounding: return 0.05 EUR (5) | 0.05 EUR (5) | 50% | 5 x 0.5 = 2.5 rounds to 3 | 0.03 EUR |
+
+Push versus cancel: a `PUSH` leg pays 1.00 and keeps counting with its original
+odds for the minimums; a `CANCELLED` leg pays 1.00 and is removed, and the
+minimums are re-checked on the remaining legs (a failure gives `WON_NO_BONUS`). A
+fully cancelled bet returns the token. See [Settlement](#settlement) for the full
+rules and worked examples.
+
+---
+
 ## Reward Profiles
 
 Ride checkpoint count, volatility, and crash timing are derived internally from the
@@ -86,25 +142,7 @@ does not change that started ride or an existing locked payout.
 ```json
 // Request
 {
-  "name": "Standard Combo Boost",
-  "description": "Default boost profile for combo bets",
-  "min_selections": 3,
-  "min_combined_odds": 3.0,
-  "min_selection_odds": 1.2,
-  "min_boost_pct": 0.05,
-  "max_boost_pct": 0.5,
-  "max_boost_min_selections": 6,
-  "max_boost_min_combined_odds": 12.0,
-  "max_eligibility_selection_weight": 0.75,
-  "max_eligibility_odds_weight": 0.25,
-  "effective_min_floor_rate": 0.35,
-  "ride_mode": "WAVES",
-  "ride_duration_seconds": 3600
-}
-
-// Response (201 Created)
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "brand_id": "acme",
   "name": "Standard Combo Boost",
   "description": "Default boost profile for combo bets",
   "min_selections": 3,
@@ -119,11 +157,40 @@ does not change that started ride or an existing locked payout.
   "effective_min_floor_rate": 0.35,
   "ride_mode": "WAVES",
   "ride_duration_seconds": 3600,
+  "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
+  "reward_validity_seconds": 604800
+}
+
+// Response (201 Created)
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "brand_id": "acme",
+  "name": "Standard Combo Boost",
+  "description": "Default boost profile for combo bets",
+  "min_selections": 3,
+  "min_combined_odds": 3.0,
+  "min_selection_odds": 1.2,
+  "min_boost_pct": 0.05,
+  "max_boost_pct": 0.5,
+  "max_boost_min_selections": 6,
+  "max_boost_min_combined_odds": 12.0,
+  "max_eligibility_selection_weight": 0.75,
+  "max_eligibility_odds_weight": 0.25,
+  "effective_min_floor_rate": 0.35,
+  "ride_mode": "WAVES",
+  "ride_duration_seconds": 3600,
+  "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
+  "reward_validity_seconds": 604800,
   "is_active": true,
   "created_at": "2024-01-15T10:30:00.000Z",
   "updated_at": "2024-01-15T10:30:00.000Z"
 }
 ```
+
+`brand_id`, `max_bonus_minor` and `reward_validity_seconds` are required.
+`max_bonus_minor` needs at least one currency with a positive integer cap, and
+`reward_validity_seconds` must be 60-31,536,000; violations return 400
+`VALIDATION_ERROR`.
 
 ### Get Profile
 
@@ -156,6 +223,8 @@ does not change that started ride or an existing locked payout.
 ### List Profiles
 
 **GET** `/api/profiles` or `/api/profiles?active=true`
+
+Optional query `brand_id` limits the list to one brand (`/api/profiles?brand_id=acme&active=true`).
 
 ```json
 // Response (200 OK)
@@ -199,6 +268,8 @@ does not change that started ride or an existing locked payout.
   "max_eligibility_odds_weight": 0.2,
   "effective_min_floor_rate": 0.4,
   "ride_mode": "LINEAR",
+  "max_bonus_minor": { "EUR": 75000 },
+  "reward_validity_seconds": 259200,
   "is_active": true
 }
 
@@ -211,6 +282,10 @@ does not change that started ride or an existing locked payout.
   // ... other fields
 }
 ```
+
+`max_bonus_minor` replaces the whole cap map and affects future opt-ins only;
+`reward_validity_seconds` affects future grants only. `brand_id` cannot be updated
+(400 `VALIDATION_ERROR`).
 
 ### Delete Profile
 
@@ -259,12 +334,19 @@ generated server-side from 32 random bytes and is never returned.
 // Response (201 Created)
 {
   "id": "660e8400-e29b-41d4-a716-446655440001",
+  "brand_id": "acme",
   "user_id": "user-12345",
   "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "GRANTED",
   "start_time": "2024-01-15T12:00:00.000Z",
   "end_time": null,
   "opted_in_at": null,
+  "valid_until": "2024-01-22T12:00:00.000Z",
+  "bet_id": null,
+  "stake_minor": null,
+  "currency": null,
+  "bonus_cap_minor": null,
+  "replaces_reward_id": null,
   "created_at": "2024-01-15T12:00:00.000Z",
   "updated_at": "2024-01-15T12:00:00.000Z"
 }
@@ -318,12 +400,19 @@ generated server-side from 32 random bytes and is never returned.
 // Response (200 OK)
 {
   "id": "660e8400-e29b-41d4-a716-446655440001",
+  "brand_id": "acme",
   "user_id": "user-12345",
   "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "ENTERED",
   "start_time": "2024-01-15T12:05:00.000Z",
   "end_time": null,
   "opted_in_at": "2024-01-15T12:05:00.000Z",
+  "valid_until": "2024-01-22T12:00:00.000Z",
+  "bet_id": "bet-789",
+  "stake_minor": 1000,
+  "currency": "EUR",
+  "bonus_cap_minor": 50000,
+  "replaces_reward_id": null,
   "created_at": "2024-01-15T12:00:00.000Z",
   "updated_at": "2024-01-15T12:05:00.000Z"
 }
@@ -331,7 +420,10 @@ generated server-side from 32 random bytes and is never returned.
 
 ### Get User Rewards
 
-**GET** `/api/rewards/user/:userId`
+**GET** `/api/rewards/user/:userId?brand_id=acme`
+
+`brand_id` is required (400 `VALIDATION_ERROR` when missing or malformed); only
+that brand's rewards for the player are returned.
 
 ```json
 // Response (200 OK)
@@ -350,7 +442,9 @@ generated server-side from 32 random bytes and is never returned.
 
 ### Get Active Reward
 
-**GET** `/api/rewards/user/:userId/active`
+**GET** `/api/rewards/user/:userId/active?brand_id=acme`
+
+`brand_id` is required. A `GRANTED` reward past its `valid_until` is not active.
 
 ```json
 // Response (200 OK) - with active reward
@@ -381,8 +475,22 @@ original models; pre-snapshot rides retain their explicit legacy fallback. The
 snapshot is internal, not a new opt-in response field. `end_time` is kept in the
 response shape for compatibility but is always `null` for a live ride.
 
-A `bet_id` already attached to a different reward (any status) is rejected with
-409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
+The body also carries the stake and its currency (see
+[Brands, money and validity](#brands-money-and-validity)):
+- `stake_minor`: required positive safe integer, at most 1e12 (1000 = 10.00).
+- `currency`: required, `^[A-Z]{3}$`, and a key of the profile's `max_bonus_minor`
+  map; otherwise 422 `CURRENCY_NOT_SUPPORTED` and the reward stays `GRANTED`.
+- `ticket.stake` (the old decimal stake) is **deprecated**: it is still accepted,
+  but ignored.
+- Selection ids must be unique within the ticket (400 `VALIDATION_ERROR`
+  otherwise), because settlement reports one result per `selection_id`.
+
+The stake, currency and the profile's cap for that currency are frozen on the
+reward. Opting in after `valid_until` marks the reward `EXPIRED` (with an audit
+row) and returns 422 `REWARD_EXPIRED`.
+
+A `bet_id` already attached to a different reward of the same brand (any status)
+is rejected with 409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
 (`ALREADY_OPTED_IN`, `REWARD_ALREADY_USED`, `REWARD_EXPIRED`). The status change,
 bet binding, checkpoints and audit row are written in one transaction; a
 concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
@@ -392,6 +500,8 @@ concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
 {
   "user_id": "user-12345",
   "bet_id": "bet-789",
+  "stake_minor": 1000,
+  "currency": "EUR",
   "ticket": {
     "selections": [
       {
@@ -422,8 +532,12 @@ concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
 // Response (200 OK)
 {
   "reward_id": "660e8400-e29b-41d4-a716-446655440001",
+  "brand_id": "acme",
   "status": "ENTERED",
   "ride_started": true,
+  "stake_minor": 1000,
+  "currency": "EUR",
+  "bonus_cap_minor": 50000,
   "end_time": null
 }
 ```
@@ -578,6 +692,7 @@ the full response also includes `boost_model` and `ride_path`:
 ```json
 {
   "lock_id": "770e8400-e29b-41d4-a716-446655440002",
+  "brand_id": "acme",
   "bet_id": "bet-789",
   "reward_id": "660e8400-e29b-41d4-a716-446655440001",
   "locked_boost_pct": 0.251138,
@@ -604,7 +719,11 @@ with `RIDE_CRASHED` or `RIDE_ENDED`; its error `details` include zero current bo
 
 ### Get Lock
 
-**GET** `/api/boost/lock/:betId`
+**GET** `/api/boost/lock/:betId?brand_id=acme`
+
+`brand_id` is required (400 `VALIDATION_ERROR` otherwise); a lock in another brand
+returns 404. Locks are unique per `(brand_id, bet_id)`, so the same `bet_id` can be
+locked once in each brand.
 
 HTTP 200 returns the saved lock fields shown above, including the stored
 `maximum_model` when available, `boost_model`, exact stop offset, and `ride_path`.
@@ -616,73 +735,346 @@ lock returns 404 with code `LOCK_NOT_FOUND`.
 
 ## Settlement
 
+Settlement applies to **locked** bets only. A bet that was opted in but never
+locked has nothing to settle (404 `LOCK_NOT_FOUND`), and a ride that crashed or
+ended without a lock returns no token.
+
+The server computes the result from values frozen earlier, never from the request:
+
+| Input | Frozen at | Source |
+|-------|-----------|--------|
+| Ticket legs and their odds (the whole stored ticket) | opt-in | reward |
+| `stake_minor`, `currency`, `bonus_cap_minor` | opt-in | reward |
+| `locked_boost_pct` | lock | lock |
+| Profile minimums (selections, combined odds, selection odds) | opt-in / lock | lock snapshot |
+
+Arithmetic is exact integer arithmetic (no floats). Odds and the locked boost are
+read with at most 6 decimal places, and each amount is rounded once, half-up:
+
+- `total_return_minor = round_half_up(stake_minor x product of leg odds)`, where a
+  `WON` leg uses its original odds and a `PUSH` or `CANCELLED` leg uses 1.00;
+- `bonus_minor = min(round_half_up(total_return_minor x locked_boost_pct), bonus_cap_minor)`;
+  `cap_applied` is true only when the uncapped bonus is strictly above the cap.
+
+A reward locked without a stake/currency/cap snapshot (legacy data) cannot be
+settled: 422 `SETTLEMENT_UNAVAILABLE`; so is a stored ticket or money snapshot the
+calculator rejects (for example stored odds with more than 6 decimal places). Odds
+sent at opt-in or lock with more than 6 decimal places are rejected up front (400
+`VALIDATION_ERROR`).
+
+`total_return_minor` is an exact decimal-integer **string** (for example `"9975"`;
+`"0"` for `LOST`, `null` for `CANCELLED` and `CASHED_OUT`) in every settlement
+response, the GET and each revision, because a sportsbook return can exceed 2^53
+(100 legs at odds 10,000 on a 1e12 stake return 10^412 minor units). It is stored
+exactly as text. There is no size limit: every ticket the API accepts settles, and
+max payout or max stake rules are the sportsbook's responsibility, not the boost's.
+The bonus stays at most `bonus_cap_minor`, so `bonus_minor` and every other money
+field remain JSON numbers.
+
 ### Settle Bet
 
 **POST** `/api/settlement`
 
-`winnings` must be a finite number from 0 to 1,000,000,000 (interim bound);
-anything else is 400 `VALIDATION_ERROR`. Replaying the same `bet_id` with the same
-`outcome` and `winnings` (compared at the stored 4-decimal precision) returns the
-existing record with 201; a different outcome or amount returns 409
-`BET_ALREADY_SETTLED` and the stored record is unchanged (resettlement is not yet
-supported). Concurrent settlements of one bet resolve to the same rule.
+- `brand_id`, `bet_id`: the bet (a `bet_id` is unique inside its brand).
+- `outcome`: `SETTLED`, `CASHOUT` or `CANCELLED`.
+- `legs`: required for `SETTLED`, forbidden otherwise. Exactly one
+  `{ "selection_id", "result" }` per **bet leg**, with `result` one of `WON`,
+  `LOST`, `PUSH`, `CANCELLED`, in any order. Bet legs are all stored ticket
+  selections except `SGP_LEG` (illustrative only), including excluded and
+  ineligible selections. Missing, unknown, duplicate or `SGP_LEG` ids are 400
+  `VALIDATION_ERROR` with one entry per problem in `details`.
+
+Bet result, in this order:
+
+| Condition | `bet_result` | Total return | Bonus | Token |
+|-----------|--------------|--------------|-------|-------|
+| `outcome` `CASHOUT` | `CASHED_OUT` | `null` | 0 | spent |
+| `outcome` `CANCELLED`, or every leg `CANCELLED` | `CANCELLED` | `null` | 0 | **returned** as a new reward |
+| any leg `LOST` | `LOST` | 0 | 0 | spent |
+| no leg `WON` (all `PUSH`, or `PUSH` and `CANCELLED`) | `PUSHED` | the stake | 0 | spent |
+| a leg `CANCELLED` and the minimums fail on the remaining legs | `WON_NO_BONUS` | computed | 0 | spent |
+| otherwise | `WON` | computed | capped bonus | spent |
+
+The minimums re-check runs only when at least one leg is `CANCELLED`. It applies
+the opt-in qualifying filter to the non-cancelled bet legs; a `PUSH` leg counts
+with its **original** odds (a push is a legitimate result, so it never triggers a
+re-evaluation by itself). `minimums_met` is `true`/`false` when the re-check ran
+and `null` otherwise. The locked boost rate never changes.
+
+**Worked examples.** Profile minimums: 2 selections, combined odds 5.0, selection
+odds 1.2. Stake 10.00 EUR (`stake_minor` 1000), legs `a` 2.10, `b` 1.90, `c` 2.50
+(combined 9.975), locked boost 20%, cap 500.00 EUR (50000).
+
+| Legs `a` / `b` / `c` | `bet_result` | `total_return_minor` | `bonus_minor` | `minimums_met` |
+|----------------------|--------------|----------------------|---------------|----------------|
+| WON / WON / WON | `WON` | 9975 (99.75 EUR) | 1995 (19.95 EUR) | `null` |
+| WON / PUSH / WON | `WON` | 5250 | 1050 | `null` |
+| PUSH / PUSH / PUSH | `PUSHED` | 1000 | 0 | `null` |
+| WON / CANCELLED / WON (2.10 x 2.50 = 5.25 keeps the minimums) | `WON` | 5250 | 1050 | `true` |
+| WON / WON / CANCELLED (2.10 x 1.90 = 3.99 < 5.0) | `WON_NO_BONUS` | 3990 | 0 | `false` |
+| WON / CANCELLED / PUSH (re-check 2.10 x 2.50 at the push's original odds = 5.25) | `WON` | 2100 | 420 | `true` |
+| WON / PUSH / CANCELLED (re-check 2.10 x 1.90 = 3.99) | `WON_NO_BONUS` | 2100 | 0 | `false` |
+| WON / LOST / any | `LOST` | 0 | 0 | `null` |
+| `outcome` `CASHOUT` (no legs) | `CASHED_OUT` | `null` | 0 | `null` |
+| `outcome` `CANCELLED`, or all legs CANCELLED | `CANCELLED` | `null` | 0 | `null` |
+| WON / WON / WON with a 15.00 EUR cap (1500) | `WON` | 9975 | 1500, `cap_applied: true` | `null` |
 
 ```json
-// Request - Win
+// Request - every leg won
 {
+  "brand_id": "acme",
   "bet_id": "bet-789",
-  "outcome": "WIN",
-  "winnings": 642.00
+  "outcome": "SETTLED",
+  "legs": [
+    { "selection_id": "a", "result": "WON" },
+    { "selection_id": "b", "result": "WON" },
+    { "selection_id": "c", "result": "WON" }
+  ]
 }
 
 // Response (201 Created)
 {
   "settlement_id": "880e8400-e29b-41d4-a716-446655440003",
+  "brand_id": "acme",
   "bet_id": "bet-789",
-  "outcome": "WIN",
-  "winnings": 642.00,
-  "bonus_amount": 224.70,
-  "locked_boost_pct": 0.35,
+  "lock_id": "770e8400-e29b-41d4-a716-446655440002",
+  "revision": 1,
+  "outcome": "SETTLED",
+  "bet_result": "WON",
+  "legs": [
+    { "selection_id": "a", "result": "WON" },
+    { "selection_id": "b", "result": "WON" },
+    { "selection_id": "c", "result": "WON" }
+  ],
+  "currency": "EUR",
+  "stake_minor": 1000,
+  "total_return_minor": "9975",
+  "locked_boost_pct": 0.2,
+  "bonus_minor": 1995,
+  "bonus_cap_minor": 50000,
+  "cap_applied": false,
+  "minimums_met": null,
+  "replacement_reward_id": null,
+  "replacement_status": null,
+  "reason": null,
+  "previous_bonus_minor": null,
+  "bonus_delta_minor": null,
   "settled_at": "2024-01-15T15:00:00.000Z"
 }
 
-// Request - Loss
+// Request - one leg pushed: 1000 x 2.10 x 1.00 x 2.50 = 5250, bonus 1050
 {
+  "brand_id": "acme",
   "bet_id": "bet-789",
-  "outcome": "LOSS",
-  "winnings": 0
+  "outcome": "SETTLED",
+  "legs": [
+    { "selection_id": "a", "result": "WON" },
+    { "selection_id": "b", "result": "PUSH" },
+    { "selection_id": "c", "result": "WON" }
+  ]
+}
+// Response (201): "bet_result": "WON", "total_return_minor": "5250", "bonus_minor": 1050, "minimums_met": null
+
+// Request - one leg cancelled, minimums kept: legs a WON, b CANCELLED, c WON
+// Response (201): "bet_result": "WON", "total_return_minor": "5250", "bonus_minor": 1050, "minimums_met": true
+
+// Request - one leg cancelled, minimums broken: legs a WON, b WON, c CANCELLED
+// Response (201): "bet_result": "WON_NO_BONUS", "total_return_minor": "3990", "bonus_minor": 0, "minimums_met": false
+
+// Request - a leg lost: legs a WON, b LOST, c WON
+// Response (201): "bet_result": "LOST", "total_return_minor": "0", "bonus_minor": 0
+
+// Request - cash-out (no legs)
+{ "brand_id": "acme", "bet_id": "bet-789", "outcome": "CASHOUT" }
+// Response (201): "bet_result": "CASHED_OUT", "total_return_minor": null, "bonus_minor": 0
+
+// Request - whole bet cancelled (no legs)
+{ "brand_id": "acme", "bet_id": "bet-789", "outcome": "CANCELLED" }
+
+// Response (201 Created)
+{
+  "settlement_id": "880e8400-e29b-41d4-a716-446655440004",
+  "brand_id": "acme",
+  "bet_id": "bet-789",
+  "lock_id": "770e8400-e29b-41d4-a716-446655440002",
+  "revision": 1,
+  "outcome": "CANCELLED",
+  "bet_result": "CANCELLED",
+  "legs": null,
+  "currency": "EUR",
+  "stake_minor": 1000,
+  "total_return_minor": null,
+  "locked_boost_pct": 0.2,
+  "bonus_minor": 0,
+  "bonus_cap_minor": 50000,
+  "cap_applied": false,
+  "minimums_met": null,
+  "replacement_reward_id": "990e8400-e29b-41d4-a716-446655440005",
+  "replacement_status": "ISSUED",
+  "reason": null,
+  "previous_bonus_minor": null,
+  "bonus_delta_minor": null,
+  "settled_at": "2024-01-15T15:00:00.000Z"
+}
+```
+
+**Returned token.** A `CANCELLED` bet returns its token: a new `GRANTED` reward for
+the same brand, user and profile, with a fresh ride seed, `replaces_reward_id` set
+to the original reward and the original `valid_until` copied. The original reward
+stays `USED`. If the original `valid_until` has already passed, no replacement is
+issued: `replacement_reward_id` is `null` and `replacement_status` is
+`NOT_ISSUED_EXPIRED`. `replacement_status` is `null` for every other result.
+
+**Replays and conflicts.** Legs are compared after sorting by `selection_id`, so
+the same results in another order are the same payload. Repeating a POST with an
+identical payload returns the current revision (201). A different payload is 409
+`BET_ALREADY_SETTLED` and nothing changes; correct a settlement with
+`POST /api/settlement/resettle`. Concurrent settlements never return 500: two
+identical requests create one row (the other is a replay), two different ones give
+one 201 and one 409. The settlement revision, any replacement reward and the audit
+rows are written in one transaction. A replay only matches the **current**
+revision: after a resettlement, repeating the original `POST /api/settlement`
+returns 409 `BET_ALREADY_SETTLED`.
+
+```json
+// Response (409 Conflict)
+{
+  "error": "Conflict",
+  "code": "BET_ALREADY_SETTLED",
+  "message": "Bet is already settled with a different result; use POST /api/settlement/resettle to correct it"
+}
+
+// Response (400 Bad Request) - legs do not match the stored ticket
+{
+  "error": "Bad Request",
+  "code": "VALIDATION_ERROR",
+  "message": "Settlement legs do not match the stored ticket",
+  "details": [
+    { "code": "DUPLICATE_LEG", "selection_id": "a", "message": "selection_id a is supplied more than once" },
+    { "code": "UNKNOWN_SELECTION", "selection_id": "zzz", "message": "selection_id zzz is not on the stored ticket" },
+    { "code": "MISSING_LEG", "selection_id": "b", "message": "Bet leg b has no result" }
+  ]
+}
+```
+
+### Resettle Bet
+
+**POST** `/api/settlement/resettle`
+
+Corrects a settled bet. The body is the settle body plus a required `reason`
+(1-500 characters). The current revision `n` is kept and marked superseded, and
+revision `n + 1` becomes current; the response adds `previous_bonus_minor` (the
+bonus of revision `n`) and `bonus_delta_minor` (new bonus minus previous bonus,
+negative when the bonus goes down); both are `null` when the response is revision 1.
+A payload identical to the current revision
+is a replay (201, nothing new is written; the `reason` text is not compared).
+Resettling a bet that was never settled is 404 `SETTLEMENT_NOT_FOUND`.
+
+Replacement tokens follow the `CANCELLED` transitions:
+- to `CANCELLED` from any other result: a replacement is issued (same rules as above);
+- from `CANCELLED` to any other result: the replacement is revoked if it is still
+  `GRANTED` (it becomes `EXPIRED`, audit reason `REVOKED_BY_RESETTLEMENT`). If the
+  player has already used it, the correction is 409 `REPLACEMENT_ALREADY_USED` and
+  nothing changes;
+- `CANCELLED` to `CANCELLED`: the existing replacement (or its absence) is kept.
+
+Two concurrent corrections never return 500: one creates revision `n + 1`, the
+other gets 409 `BET_ALREADY_SETTLED` (or a replay when its payload is identical).
+
+```json
+// Request - leg b is voided after the bet was settled as all WON (bonus 1995)
+{
+  "brand_id": "acme",
+  "bet_id": "bet-789",
+  "outcome": "SETTLED",
+  "legs": [
+    { "selection_id": "a", "result": "WON" },
+    { "selection_id": "b", "result": "CANCELLED" },
+    { "selection_id": "c", "result": "WON" }
+  ],
+  "reason": "Leg b voided by the feed"
 }
 
 // Response (201 Created)
 {
-  "settlement_id": "880e8400-e29b-41d4-a716-446655440003",
+  "settlement_id": "880e8400-e29b-41d4-a716-446655440006",
+  "brand_id": "acme",
   "bet_id": "bet-789",
-  "outcome": "LOSS",
-  "winnings": 0,
-  "bonus_amount": 0,
-  "locked_boost_pct": 0.35,
-  "settled_at": "2024-01-15T15:00:00.000Z"
+  "lock_id": "770e8400-e29b-41d4-a716-446655440002",
+  "revision": 2,
+  "outcome": "SETTLED",
+  "bet_result": "WON",
+  "legs": [
+    { "selection_id": "a", "result": "WON" },
+    { "selection_id": "b", "result": "CANCELLED" },
+    { "selection_id": "c", "result": "WON" }
+  ],
+  "currency": "EUR",
+  "stake_minor": 1000,
+  "total_return_minor": "5250",
+  "locked_boost_pct": 0.2,
+  "bonus_minor": 1050,
+  "bonus_cap_minor": 50000,
+  "cap_applied": false,
+  "minimums_met": true,
+  "replacement_reward_id": null,
+  "replacement_status": null,
+  "reason": "Leg b voided by the feed",
+  "previous_bonus_minor": 1995,
+  "bonus_delta_minor": -945,
+  "settled_at": "2024-01-16T09:30:00.000Z"
+}
+
+// Response (409 Conflict) - the cancelled bet's replacement was already used
+{
+  "error": "Conflict",
+  "code": "REPLACEMENT_ALREADY_USED",
+  "message": "The replacement reward issued for this cancelled bet has already been used; the settlement was not changed",
+  "details": { "replacement_reward_id": "990e8400-e29b-41d4-a716-446655440005" }
 }
 ```
 
 ### Get Settlement
 
-**GET** `/api/settlement/:betId`
+**GET** `/api/settlement/:betId?brand_id=acme`
 
-A missing settlement returns 404 with code `SETTLEMENT_NOT_FOUND`.
+Returns the current revision in the same shape as above. `brand_id` is required
+(400 `VALIDATION_ERROR` otherwise); a bet without a settlement in that brand
+returns 404 `SETTLEMENT_NOT_FOUND`.
+
+---
+
+## Reward expiry (Admin)
+
+### Expire Rewards
+
+**POST** `/api/admin/rewards/expire`
+
+Runs the expiry job once; admin key required. It is idempotent: every change is a
+conditional status update with one audit row, so repeated or concurrent runs change
+each reward once.
+- `GRANTED` rewards past `valid_until` become `EXPIRED`.
+- `ENTERED` rewards whose ride has been over without a lock (crash or end time
+  passed) for at least `RIDE_EXPIRY_GRACE_SECONDS` (default 900) become `EXPIRED`.
+  `USED` rewards and locks are never touched.
 
 ```json
 // Response (200 OK)
 {
-  "settlement_id": "880e8400-e29b-41d4-a716-446655440003",
-  "bet_id": "bet-789",
-  "outcome": "WIN",
-  "winnings": 642.00,
-  "bonus_amount": 224.70,
-  "locked_boost_pct": 0.35,
-  "settled_at": "2024-01-15T15:00:00.000Z"
+  "granted_expired": 2,
+  "entered_expired": 1,
+  "total_expired": 3,
+  "evaluated_at": "2024-01-15T12:00:00.000Z"
 }
 ```
+
+The same job runs in-process every `REWARD_EXPIRY_INTERVAL_SECONDS` seconds
+(default 300; `0` disables it) while the server is running, and never in test.
+Expiry never hides a ride outcome: quote and lock for an `EXPIRED` reward that
+entered a ride for that bet still evaluate the ride and report `RIDE_CRASHED` /
+`RIDE_ENDED` with the usual terminal details. `REWARD_EXPIRED` is reported for
+rewards that never entered a ride (or for another bet), and such a reward can
+never be locked.
 
 ---
 
@@ -813,14 +1205,16 @@ Malformed JSON returns 400 and an oversized body 413, both with
 | `REWARD_ALREADY_USED` | Reward has been locked to a bet |
 | `NOT_OPTED_IN` | User hasn't opted into the reward |
 | `ALREADY_OPTED_IN` | User already opted in |
-| `BET_ALREADY_BOUND` | Bet ID is already attached to a different reward (409) |
+| `BET_ALREADY_BOUND` | Bet ID is already attached to a different reward of the same brand (409) |
+| `CURRENCY_NOT_SUPPORTED` | The opt-in currency is not a key of the profile's `max_bonus_minor` (422) |
 | `RIDE_CRASHED` | Ride reached its pre-end crash boundary |
 | `RIDE_ENDED` | Ride reached end time without an earlier crash event |
 | `BET_ALREADY_LOCKED` | Bet ID is already locked for a different reward or user (409) |
-| `LOCK_NOT_FOUND` | No lock exists for bet |
-| `BET_ALREADY_SETTLED` | Bet already settled with a different outcome or winnings (409) |
-| `SETTLEMENT_NOT_FOUND` | No settlement exists for bet (404) |
-| `INVALID_OUTCOME` | Settlement outcome is invalid |
+| `LOCK_NOT_FOUND` | No lock exists for the bet in this brand (404); also returned when settling a bet that was never locked |
+| `BET_ALREADY_SETTLED` | Bet already settled with a different payload, or corrected concurrently (409) |
+| `SETTLEMENT_NOT_FOUND` | No settlement exists for the bet in this brand (404) |
+| `REPLACEMENT_ALREADY_USED` | A resettlement would revoke a replacement reward the player already used; nothing changed (409) |
+| `SETTLEMENT_UNAVAILABLE` | The locked reward has no stake/currency/cap or ticket snapshot (legacy data), or its stored data is rejected by the settlement calculator, so it cannot be settled (422) |
 | `PROFILE_NOT_FOUND` | Profile ID doesn't exist |
 | `PROFILE_INACTIVE` | Profile is not active |
 | `INVALID_CONFIGURATION` | Reward profile configuration is invalid |

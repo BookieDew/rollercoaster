@@ -4,6 +4,7 @@ import rewardsRouter from './rewards';
 import boostRouter from './boost';
 import settlementRouter from './settlement';
 import simulationRouter from './simulation';
+import adminRouter from './admin';
 import { createApiError } from '../middleware/errorHandler';
 import { ReasonCode } from '../types/reasonCodes';
 
@@ -15,6 +16,7 @@ router.use('/rewards', rewardsRouter);
 router.use('/boost', boostRouter);
 router.use('/settlement', settlementRouter);
 router.use('/simulation', simulationRouter);
+router.use('/admin', adminRouter);
 
 // Anything else under /api is a JSON 404 (must stay last).
 router.use((_req, _res, next) => {

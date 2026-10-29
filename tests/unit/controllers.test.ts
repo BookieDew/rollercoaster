@@ -6,6 +6,7 @@ import {
 } from '../../src/controllers/boostController';
 import {
   settleBet,
+  resettleBet,
   getSettlement,
 } from '../../src/controllers/settlementController';
 import {
@@ -115,6 +116,7 @@ describe('controller branch coverage', () => {
         success: true,
         data: {
           lock_id: 'lock-1',
+          brand_id: 'default',
           bet_id: 'bet-1',
           reward_id: 'reward-1',
           locked_boost_pct: 0.1,
@@ -196,89 +198,123 @@ describe('controller branch coverage', () => {
       } as unknown as Awaited<ReturnType<typeof boostLockService.getLockByBetId>> extends { data: infer T } ? T : never;
 
       jest.spyOn(boostLockService, 'getLockByBetId').mockResolvedValue({ success: true, data: lock });
-      await getLock(mockRequest({}, { betId: 'bet-1' }), res, next);
+      await getLock(mockRequest({}, { betId: 'bet-1' }, { brand_id: 'brand-a' }), res, next);
       expect(res.json).toHaveBeenCalled();
 
       jest.spyOn(boostLockService, 'getLockByBetId').mockResolvedValueOnce({ success: true, data: null });
-      await getLock(mockRequest({}, { betId: 'bet-missing' }), res, next);
+      await getLock(mockRequest({}, { betId: 'bet-missing' }, { brand_id: 'brand-a' }), res, next);
       expect(nextError(next)?.code).toBe(ReasonCode.LOCK_NOT_FOUND);
 
-      await getLock(mockRequest({}, { betId: 'x'.repeat(256) }), res, next);
+      await getLock(mockRequest({}, { betId: 'x'.repeat(256) }, { brand_id: 'brand-a' }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+
+      await getLock(mockRequest({}, { betId: 'bet-1' }), res, next);
       expect(nextError(next)).toBeInstanceOf(ZodError);
 
       jest.spyOn(boostLockService, 'getLockByBetId').mockResolvedValueOnce({
         success: false,
         error: { code: ReasonCode.INTERNAL_ERROR, message: 'boom' },
       });
-      await getLock(mockRequest({}, { betId: 'bet-err' }), res, next);
+      await getLock(mockRequest({}, { betId: 'bet-err' }, { brand_id: 'brand-a' }), res, next);
       expect(next).toHaveBeenCalled();
     });
   });
 
   describe('settlementController', () => {
-    it('handles settleBet and getSettlement branches', async () => {
-      jest.spyOn(settlementService, 'settleBet').mockResolvedValue({
-        success: true,
-        data: {
-          settlement_id: 's1',
-          bet_id: 'b1',
-          outcome: 'WIN',
-          winnings: 100,
-          bonus_amount: 10,
-          locked_boost_pct: 0.1,
-          settled_at: new Date().toISOString(),
-        },
-      });
+    const settlementDto = {
+      settlement_id: 's1',
+      brand_id: 'brand-a',
+      bet_id: 'b1',
+      lock_id: 'l1',
+      revision: 1,
+      outcome: 'CASHOUT' as const,
+      bet_result: 'CASHED_OUT' as const,
+      legs: null,
+      currency: 'EUR',
+      stake_minor: 1000,
+      total_return_minor: null,
+      locked_boost_pct: 0.1,
+      bonus_minor: 0,
+      bonus_cap_minor: 50_000,
+      cap_applied: false,
+      minimums_met: null,
+      replacement_reward_id: null,
+      replacement_status: null,
+      reason: null,
+      previous_bonus_minor: null,
+      bonus_delta_minor: null,
+      settled_at: new Date().toISOString(),
+    };
+    const body = { brand_id: 'brand-a', bet_id: 'b1', outcome: 'CASHOUT' };
 
-      await settleBet(mockRequest({
-        bet_id: 'b1',
-        outcome: 'WIN',
-        winnings: 100,
-      }), res, next);
+    it('handles settleBet branches', async () => {
+      const settle = jest.spyOn(settlementService, 'settleBet').mockResolvedValue({ success: true, data: settlementDto });
+      await settleBet(mockRequest(body), res, next);
       expect(res.status).toHaveBeenCalledWith(201);
+      expect(settle).toHaveBeenCalledWith({ brandId: 'brand-a', betId: 'b1', outcome: 'CASHOUT', legs: undefined });
 
-      jest.spyOn(settlementService, 'settleBet').mockResolvedValueOnce({
+      settle.mockResolvedValueOnce({
         success: false,
-        error: { code: ReasonCode.LOCK_NOT_FOUND, message: 'missing' },
+        error: { code: ReasonCode.VALIDATION_ERROR, message: 'bad legs', details: [{ code: 'MISSING_LEG' }] },
       });
-      await settleBet(mockRequest({
-        bet_id: 'b1',
-        outcome: 'WIN',
-        winnings: 100,
-      }), res, next);
-      expect(next).toHaveBeenCalled();
+      await settleBet(mockRequest(body), res, next);
+      expect(nextError(next)).toMatchObject({ code: ReasonCode.VALIDATION_ERROR, statusCode: 400, details: [{ code: 'MISSING_LEG' }] });
 
-      await settleBet(mockRequest({ bet_id: 'b1', winnings: 100 }), res, next);
-      expect(next).toHaveBeenCalled();
+      settle.mockResolvedValueOnce({ success: false });
+      await settleBet(mockRequest(body), res, next);
+      expect(nextError(next)?.code).toBe(ReasonCode.INTERNAL_ERROR);
 
-      jest.spyOn(settlementService, 'getSettlementByBetId').mockResolvedValue({
-        success: true,
-        data: null,
+      // legs are required for SETTLED and forbidden otherwise
+      await settleBet(mockRequest({ ...body, outcome: 'SETTLED' }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+      await settleBet(mockRequest({ ...body, legs: [{ selection_id: 'x', result: 'WON' }] }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+    });
+
+    it('handles resettleBet branches', async () => {
+      const resettle = jest.spyOn(settlementService, 'resettleBet')
+        .mockResolvedValue({ success: true, data: { ...settlementDto, revision: 2, reason: 'fix' } });
+      await resettleBet(mockRequest({ ...body, reason: '  fix  ' }), res, next);
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(resettle).toHaveBeenCalledWith({
+        brandId: 'brand-a', betId: 'b1', outcome: 'CASHOUT', legs: undefined, reason: 'fix',
       });
-      await getSettlement(mockRequest({}, { betId: 'missing' }), res, next);
+
+      resettle.mockResolvedValueOnce({
+        success: false,
+        error: { code: ReasonCode.REPLACEMENT_ALREADY_USED, message: 'used' },
+      });
+      await resettleBet(mockRequest({ ...body, reason: 'fix' }), res, next);
+      expect(nextError(next)).toMatchObject({ code: ReasonCode.REPLACEMENT_ALREADY_USED, statusCode: 409 });
+
+      await resettleBet(mockRequest(body), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+      await resettleBet(mockRequest({ ...body, reason: '   ' }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+      await resettleBet(mockRequest({ ...body, reason: 'x'.repeat(501) }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
+    });
+
+    it('handles getSettlement branches', async () => {
+      const get = jest.spyOn(settlementService, 'getSettlementByBetId').mockResolvedValue({ success: true, data: null });
+      await getSettlement(mockRequest({}, { betId: 'missing' }, { brand_id: 'brand-a' }), res, next);
       expect(nextError(next)?.code).toBe(ReasonCode.SETTLEMENT_NOT_FOUND);
 
-      jest.spyOn(settlementService, 'getSettlementByBetId').mockResolvedValueOnce({
-        success: true,
-        data: {
-          settlement_id: 's2',
-          bet_id: 'b2',
-          outcome: 'LOSS',
-          winnings: 0,
-          bonus_amount: 0,
-          locked_boost_pct: 0.2,
-          settled_at: new Date().toISOString(),
-        },
-      });
-      await getSettlement(mockRequest({}, { betId: 'b2' }), res, next);
-      expect(res.json).toHaveBeenCalled();
+      get.mockResolvedValueOnce({ success: true, data: settlementDto });
+      await getSettlement(mockRequest({}, { betId: 'b1' }, { brand_id: 'brand-a' }), res, next);
+      expect(res.json).toHaveBeenCalledWith(settlementDto);
+      expect(get).toHaveBeenLastCalledWith('brand-a', 'b1');
 
-      jest.spyOn(settlementService, 'getSettlementByBetId').mockResolvedValueOnce({
-        success: false,
-        error: { code: ReasonCode.INTERNAL_ERROR, message: 'err' },
-      });
-      await getSettlement(mockRequest({}, { betId: 'b3' }), res, next);
-      expect(next).toHaveBeenCalled();
+      get.mockResolvedValueOnce({ success: false, error: { code: ReasonCode.INTERNAL_ERROR, message: 'err' } });
+      await getSettlement(mockRequest({}, { betId: 'b3' }, { brand_id: 'brand-a' }), res, next);
+      expect(nextError(next)?.code).toBe(ReasonCode.INTERNAL_ERROR);
+
+      get.mockResolvedValueOnce({ success: false });
+      await getSettlement(mockRequest({}, { betId: 'b3' }, { brand_id: 'brand-a' }), res, next);
+      expect(nextError(next)?.code).toBe(ReasonCode.INTERNAL_ERROR);
+
+      await getSettlement(mockRequest({}, { betId: 'b4' }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
     });
   });
 
@@ -343,14 +379,18 @@ describe('controller branch coverage', () => {
         success: true,
         data: [rewardDto],
       });
-      await getRewardsByUser(mockRequest({}, { userId: 'u1' }), res, next);
+      await getRewardsByUser(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(res.json).toHaveBeenCalled();
+      expect(rewardEntitlementService.getRewardsByUserId).toHaveBeenCalledWith('brand-a', 'u1');
+
+      await getRewardsByUser(mockRequest({}, { userId: 'u1' }), res, next);
+      expect(nextError(next)).toBeInstanceOf(ZodError);
 
       jest.spyOn(rewardEntitlementService, 'getRewardsByUserId').mockResolvedValueOnce({
         success: false,
         error: { code: ReasonCode.INTERNAL_ERROR, message: 'boom' },
       });
-      await getRewardsByUser(mockRequest({}, { userId: 'u1' }), res, next);
+      await getRewardsByUser(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(next).toHaveBeenCalled();
 
       jest.spyOn(rewardOptInService, 'optIn').mockResolvedValue({
@@ -363,12 +403,18 @@ describe('controller branch coverage', () => {
       await optInToReward(mockRequest({
         user_id: 'u1',
         bet_id: 'bet-1',
+        stake_minor: 1000,
+        currency: 'EUR',
         ticket: { selections: [{ id: 's1', odds: 1.5 }] },
       }, { id: REWARD_ID }), res, next);
       expect(res.json).toHaveBeenLastCalledWith({
         reward_id: 'reward-1',
+        brand_id: 'default',
         status: 'ENTERED',
         ride_started: true,
+        stake_minor: null,
+        currency: null,
+        bonus_cap_minor: null,
         end_time: null,
       });
 
@@ -379,6 +425,8 @@ describe('controller branch coverage', () => {
       await optInToReward(mockRequest({
         user_id: 'u1',
         bet_id: 'bet-1',
+        stake_minor: 1000,
+        currency: 'EUR',
         ticket: { selections: [{ id: 's1', odds: 1.5 }] },
       }, { id: REWARD_ID }), res, next);
       expect(next).toHaveBeenCalled();
@@ -390,21 +438,21 @@ describe('controller branch coverage', () => {
         success: true,
         data: null,
       });
-      await getActiveReward(mockRequest({}, { userId: 'u1' }), res, next);
+      await getActiveReward(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(res.json).toHaveBeenCalledWith({ active_reward: null });
 
       jest.spyOn(rewardEntitlementService, 'getActiveRewardForUser').mockResolvedValueOnce({
         success: true,
         data: rewardDto,
       });
-      await getActiveReward(mockRequest({}, { userId: 'u1' }), res, next);
+      await getActiveReward(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(res.json).toHaveBeenCalled();
 
       jest.spyOn(rewardEntitlementService, 'getActiveRewardForUser').mockResolvedValueOnce({
         success: false,
         error: { code: ReasonCode.INTERNAL_ERROR, message: 'fail' },
       });
-      await getActiveReward(mockRequest({}, { userId: 'u1' }), res, next);
+      await getActiveReward(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(next).toHaveBeenCalled();
 
       jest.spyOn(rewardOptInService, 'precheckEligibility').mockResolvedValue({

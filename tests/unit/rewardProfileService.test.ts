@@ -37,6 +37,9 @@ describe('rewardProfileService', () => {
   describe('createProfile', () => {
     it('rejects invalid boost range', async () => {
       const result = await rewardProfileService.createProfile({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Invalid',
         minSelections: 5,
         minCombinedOdds: 10,
@@ -52,6 +55,9 @@ describe('rewardProfileService', () => {
 
     it('rejects max-boost selection threshold lower than min selections', async () => {
       const result = await rewardProfileService.createProfile({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Invalid',
         minSelections: 5,
         minCombinedOdds: 10,
@@ -68,6 +74,9 @@ describe('rewardProfileService', () => {
 
     it('rejects max-boost odds threshold lower than min combined odds', async () => {
       const result = await rewardProfileService.createProfile({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Invalid',
         minSelections: 5,
         minCombinedOdds: 10,
@@ -84,6 +93,9 @@ describe('rewardProfileService', () => {
 
     it('rejects invalid selection/odds weight split', async () => {
       const result = await rewardProfileService.createProfile({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Invalid',
         minSelections: 5,
         minCombinedOdds: 10,
@@ -113,6 +125,9 @@ describe('rewardProfileService', () => {
       });
 
       const result = await rewardProfileService.createProfile({
+        brandId: 'brand-a',
+        maxBonusMinor: { EUR: 50_000 },
+        rewardValiditySeconds: 86_400,
         name: 'Valid',
         minSelections: 5,
         minCombinedOdds: 10,

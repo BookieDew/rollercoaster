@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { settleBet, getSettlement } from '../controllers/settlementController';
+import { settleBet, resettleBet, getSettlement } from '../controllers/settlementController';
 import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -9,13 +9,19 @@ router.use(authMiddleware);
 
 /**
  * POST /settlement
- * Settle a bet outcome and calculate bonus
+ * Settle a locked bet from its leg results and compute the bonus
  */
 router.post('/', settleBet);
 
 /**
- * GET /settlement/:betId
- * Get settlement record by bet ID
+ * POST /settlement/resettle
+ * Correct a settlement: creates the next revision and adjusts replacement tokens
+ */
+router.post('/resettle', resettleBet);
+
+/**
+ * GET /settlement/:betId?brand_id=
+ * Current settlement revision of a bet
  */
 router.get('/:betId', getSettlement);
 

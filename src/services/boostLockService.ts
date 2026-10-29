@@ -24,7 +24,23 @@ import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import type { RidePathPoint } from '../types/ride';
 import { ReasonCode } from '../types/reasonCodes';
+import { LEGACY_BRAND_ID } from '../types/brand';
 import { resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
+import { hasEnteredRide } from './boostQuoteService';
+
+function brandOf(reward: UserReward): string {
+  return reward.brandId ?? LEGACY_BRAND_ID;
+}
+
+function rewardExpired<T>(): ServiceResult<T> {
+  return {
+    success: false,
+    error: {
+      code: ReasonCode.REWARD_EXPIRED,
+      message: 'Reward has expired',
+    },
+  };
+}
 
 export interface LockInput {
   userId: string;
@@ -51,13 +67,7 @@ export async function lockBoost(
 ): Promise<ServiceResult<LockResponse>> {
   const { userId, rewardId, betId } = input;
 
-  // Idempotency: an existing lock is replayed only to the same reward and its owner.
-  const existingLock = await betBoostLockRepository.findByBetId(betId);
-  if (existingLock) {
-    return replayExistingLock(existingLock, input);
-  }
-
-  // Fetch the reward
+  // Fetch the reward: the brand of a bet comes from its reward.
   const reward = await userRewardRepository.findById(rewardId);
   if (!reward) {
     return {
@@ -67,6 +77,12 @@ export async function lockBoost(
         message: `Reward with ID ${rewardId} not found`,
       },
     };
+  }
+
+  // Idempotency: an existing lock is replayed only to the same reward and its owner.
+  const existingLock = await betBoostLockRepository.findByBetId(betId, brandOf(reward));
+  if (existingLock) {
+    return replayExistingLock(existingLock, input, reward);
   }
 
   // Verify ownership
@@ -80,21 +96,18 @@ export async function lockBoost(
     };
   }
 
-  // Check reward status
-  if (reward.status === 'EXPIRED') {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.REWARD_EXPIRED,
-        message: 'Reward has expired',
-      },
-    };
+  // Check reward status. An EXPIRED reward that entered a ride for this bet is
+  // still evaluated, so its ride outcome (RIDE_CRASHED / RIDE_ENDED) is reported;
+  // it can never be locked.
+  const expiredRide = reward.status === 'EXPIRED';
+  if (expiredRide && !(hasEnteredRide(reward) && reward.betId === betId)) {
+    return rewardExpired();
   }
 
   if (reward.status === 'USED') {
     // A concurrent lock may have committed after the idempotency check above:
     // re-read and apply the replay rule before reporting the reward as used.
-    const lockForBet = await betBoostLockRepository.findByBetId(betId);
+    const lockForBet = await betBoostLockRepository.findByBetId(betId, brandOf(reward));
     if (lockForBet) {
       return replayExistingLock(lockForBet, input, reward);
     }
@@ -107,7 +120,7 @@ export async function lockBoost(
     };
   }
 
-  if (reward.status !== 'ENTERED') {
+  if (reward.status !== 'ENTERED' && !expiredRide) {
     return {
       success: false,
       error: {
@@ -132,6 +145,7 @@ export async function lockBoost(
   // Prefer opt-in math inputs; old rides retain the explicit profile fallback.
   const rideMath = await resolveRideMathSnapshot(reward);
   if (!rideMath) {
+    if (expiredRide) return rewardExpired();
     const malformedSnapshot = reward.ticketSnapshot?.rideMath != null;
     return {
       success: false,
@@ -160,6 +174,7 @@ export async function lockBoost(
 
   // Check minimum selection count
   if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
+    if (expiredRide) return rewardExpired();
     return {
       success: false,
       error: {
@@ -171,6 +186,7 @@ export async function lockBoost(
 
   // Check minimum combined odds
   if (!meetsCombinedOddsThreshold(combinedOdds, profile.minCombinedOdds)) {
+    if (expiredRide) return rewardExpired();
     return {
       success: false,
       error: {
@@ -348,11 +364,17 @@ export async function lockBoost(
     };
   }
 
+  // An expired reward whose ride has not crashed or ended is still expired.
+  if (expiredRide) {
+    return rewardExpired();
+  }
+
   // Insert lock, consume reward (ENTERED -> USED) and audit atomically.
   let lock: BetBoostLock | null;
   try {
     lock = await runInTransaction<BetBoostLock | null>(async (tx) => {
       const created = await betBoostLockRepository.create({
+        brandId: brandOf(reward),
         betId,
         rewardId,
         lockedBoostPct,
@@ -418,6 +440,7 @@ export async function lockBoost(
         entityId: created.id,
         action: 'LOCK',
         payload: {
+          brandId: brandOf(reward),
           betId,
           rewardId,
           userId,
@@ -495,16 +518,31 @@ async function replayExistingLock(
 
 /** After a lost race (unique violation or reward no longer ENTERED), re-read and apply the replay rule. */
 async function resolveLockConflict(input: LockInput): Promise<ServiceResult<LockResponse>> {
-  const existing = await betBoostLockRepository.findByBetId(input.betId);
+  const reward = await userRewardRepository.findById(input.rewardId);
+  const existing = reward
+    ? await betBoostLockRepository.findByBetId(input.betId, brandOf(reward))
+    : null;
   if (existing) {
-    return replayExistingLock(existing, input);
+    return replayExistingLock(existing, input, reward ?? undefined);
   }
 
-  const reward = await userRewardRepository.findById(input.rewardId);
   if (reward?.status === 'EXPIRED') {
     return {
       success: false,
       error: { code: ReasonCode.REWARD_EXPIRED, message: 'Reward has expired' },
+    };
+  }
+
+  // The insert rolled back and the reward is still playable: a lock for this
+  // (brand_id, bet_id) exists that the re-read above could not see (defensive;
+  // unique(brand_id, bet_id) and unique(reward_id) back the lock table).
+  if (reward?.status === 'ENTERED') {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.BET_ALREADY_LOCKED,
+        message: 'Bet is already locked for a different reward',
+      },
     };
   }
 
@@ -518,18 +556,20 @@ async function resolveLockConflict(input: LockInput): Promise<ServiceResult<Lock
 }
 
 /**
- * Gets an existing lock by bet ID.
+ * Gets an existing lock by (brand_id, bet_id).
  */
 export async function getLockByBetId(
+  brandId: string,
   betId: string
 ): Promise<ServiceResult<BetBoostLock | null>> {
-  const lock = await betBoostLockRepository.findByBetId(betId);
+  const lock = await betBoostLockRepository.findByBetId(betId, brandId);
   return { success: true, data: lock };
 }
 
 function buildLockResponse(lock: BetBoostLock): LockResponse {
   return {
     lock_id: lock.id,
+    brand_id: lock.brandId,
     bet_id: lock.betId,
     reward_id: lock.rewardId,
     locked_boost_pct: lock.lockedBoostPct,

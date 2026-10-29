@@ -150,14 +150,14 @@ describe('rewardEntitlementService', () => {
     it('getRewardsByUserId returns rewards', async () => {
       const reward = makeReward();
       jest.spyOn(userRewardRepository, 'findByUserId').mockResolvedValue([reward]);
-      const result = await rewardEntitlementService.getRewardsByUserId(reward.userId);
+      const result = await rewardEntitlementService.getRewardsByUserId('default', reward.userId);
       expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
     });
 
     it('getActiveRewardForUser returns null when none exists', async () => {
       jest.spyOn(userRewardRepository, 'findActiveByUserId').mockResolvedValue(null);
-      const result = await rewardEntitlementService.getActiveRewardForUser('user-empty');
+      const result = await rewardEntitlementService.getActiveRewardForUser('default', 'user-empty');
       expect(result.success).toBe(true);
       expect(result.data).toBeNull();
     });

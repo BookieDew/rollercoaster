@@ -7,9 +7,11 @@ import {
   eligibilityRequestSchema,
   idParamsSchema,
   userIdParamsSchema,
+  brandQuerySchema,
 } from '../validation/schemas';
 import { toDTO, publicEndTime, type OptInResponse } from '../types/userReward';
 import { createApiError } from '../middleware/errorHandler';
+import { LEGACY_BRAND_ID } from '../types/brand';
 
 /**
  * POST /rewards - Grant a reward entitlement to a user
@@ -78,8 +80,9 @@ export async function getRewardsByUser(
 ): Promise<void> {
   try {
     const { userId } = userIdParamsSchema.parse(req.params);
+    const { brand_id: brandId } = brandQuerySchema.parse(req.query);
 
-    const result = await rewardEntitlementService.getRewardsByUserId(userId);
+    const result = await rewardEntitlementService.getRewardsByUserId(brandId, userId);
 
     if (!result.success || !result.data) {
       throw createApiError(
@@ -112,6 +115,8 @@ export async function optInToReward(
     const result = await rewardOptInService.optIn(id, {
       userId: validated.user_id,
       betId: validated.bet_id,
+      stakeMinor: validated.stake_minor,
+      currency: validated.currency,
       selections: validated.ticket.selections,
     });
 
@@ -124,8 +129,12 @@ export async function optInToReward(
 
     const response: OptInResponse = {
       reward_id: result.data.reward.id,
+      brand_id: result.data.reward.brandId ?? LEGACY_BRAND_ID,
       status: result.data.reward.status,
       ride_started: result.data.rideStarted,
+      stake_minor: result.data.reward.stakeMinor ?? null,
+      currency: result.data.reward.currency ?? null,
+      bonus_cap_minor: result.data.reward.bonusCapMinor ?? null,
       end_time: publicEndTime(result.data.reward),
     };
     res.json(response);
@@ -144,8 +153,9 @@ export async function getActiveReward(
 ): Promise<void> {
   try {
     const { userId } = userIdParamsSchema.parse(req.params);
+    const { brand_id: brandId } = brandQuerySchema.parse(req.query);
 
-    const result = await rewardEntitlementService.getActiveRewardForUser(userId);
+    const result = await rewardEntitlementService.getActiveRewardForUser(brandId, userId);
 
     if (!result.success) {
       throw createApiError(

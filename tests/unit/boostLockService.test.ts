@@ -104,6 +104,7 @@ function makeLock(overrides: Partial<BetBoostLock> = {}): BetBoostLock {
   const now = new Date().toISOString();
   return {
     id: 'lock-1',
+    brandId: 'default',
     betId: 'bet-1',
     rewardId: 'reward-1',
     lockedBoostPct: 0.2,
@@ -227,25 +228,42 @@ describe('boostLockService', () => {
     expect(result.data?.lock_id).toBe('lock-1');
   });
 
-  it('rejects an existing lock for another reward, another user or a missing reward with BET_ALREADY_LOCKED', async () => {
-    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
-    const findReward = jest.spyOn(userRewardRepository, 'findById')
-      .mockResolvedValueOnce(makeReward({ userId: 'someone-else', status: 'USED' }))
-      .mockResolvedValueOnce(null);
+  it('rejects an existing lock for another reward or another user with BET_ALREADY_LOCKED', async () => {
+    const findLock = jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
+    jest.spyOn(userRewardRepository, 'findById')
+      .mockResolvedValueOnce(makeReward({ id: 'reward-2', status: 'USED' }))
+      .mockResolvedValueOnce(makeReward({ userId: 'someone-else', status: 'USED' }));
     const create = jest.spyOn(betBoostLockRepository, 'create');
 
     const otherReward = await boostLockService.lockBoost({ ...input, rewardId: 'reward-2' });
     const otherUser = await boostLockService.lockBoost(input);
-    const missingReward = await boostLockService.lockBoost(input);
 
-    for (const result of [otherReward, otherUser, missingReward]) {
+    for (const result of [otherReward, otherUser]) {
       expect(result.success).toBe(false);
       expect(result.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
       expect(result.data).toBeUndefined();
     }
-    // A different reward never needs an ownership read.
-    expect(findReward).toHaveBeenCalledTimes(2);
+    // The lock lookup is scoped to the reward's brand.
+    expect(findLock).toHaveBeenCalledWith('bet-1', 'default');
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing reward as REWARD_NOT_FOUND without reading any lock (the brand comes from the reward)', async () => {
+    const findLock = jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValueOnce(null);
+
+    const result = await boostLockService.lockBoost(input);
+    expect(result.error?.code).toBe(ReasonCode.REWARD_NOT_FOUND);
+    expect(findLock).not.toHaveBeenCalled();
+  });
+
+  it('scopes the lock lookup to the reward brand', async () => {
+    const findLock = jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock({ brandId: 'brand-b' }));
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({ brandId: 'brand-b', status: 'USED' }));
+
+    const result = await boostLockService.lockBoost(input);
+    expect(result.success).toBe(true);
+    expect(findLock).toHaveBeenCalledWith('bet-1', 'brand-b');
   });
 
   it('returns early failures for reward lookup, ownership, and status', async () => {
@@ -253,19 +271,23 @@ describe('boostLockService', () => {
     jest.spyOn(userRewardRepository, 'findById')
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(makeReward({ userId: 'different-user' }))
-      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED' }))
+      // Expired without ever entering a ride, and expired after a ride on another bet.
+      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED', betId: null, ticketSnapshot: null }))
+      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED', betId: 'other-bet' }))
       .mockResolvedValueOnce(makeReward({ status: 'USED' }))
       .mockResolvedValueOnce(makeReward({ status: 'GRANTED' }));
 
     const missing = await boostLockService.lockBoost(input);
     const wrongUser = await boostLockService.lockBoost(input);
     const expired = await boostLockService.lockBoost(input);
+    const expiredOtherBet = await boostLockService.lockBoost(input);
     const used = await boostLockService.lockBoost(input);
     const notEntered = await boostLockService.lockBoost(input);
 
     expect(missing.error?.code).toBe(ReasonCode.REWARD_NOT_FOUND);
     expect(wrongUser.error?.code).toBe(ReasonCode.REWARD_NOT_FOUND);
     expect(expired.error?.code).toBe(ReasonCode.REWARD_EXPIRED);
+    expect(expiredOtherBet.error?.code).toBe(ReasonCode.REWARD_EXPIRED);
     expect(used.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
     expect(notEntered.error?.code).toBe(ReasonCode.NOT_OPTED_IN);
   });
@@ -391,7 +413,7 @@ describe('boostLockService', () => {
   });
 
   it('applies the replay rule after unique-key races without touching reward status', async () => {
-    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+    const findReward = jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
     jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
     jest.spyOn(betBoostLockRepository, 'findByBetId')
@@ -422,8 +444,20 @@ describe('boostLockService', () => {
     const otherReward = await boostLockService.lockBoost(input);
     expect(otherReward.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
 
+    // reward_id collision: the winning lock consumed the reward, so it reads as USED.
+    findReward.mockResolvedValueOnce(makeReward()).mockResolvedValueOnce(makeReward({ status: 'USED' }));
     const rewardCollision = await boostLockService.lockBoost(input);
     expect(rewardCollision.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
+
+    // The insert rolled back and the reward is still ENTERED, yet no lock is visible
+    // for (brand_id, bet_id): defensive conflict answer, never a 500.
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    jest.spyOn(betBoostLockRepository, 'create').mockRejectedValueOnce({
+      code: 'SQLITE_CONSTRAINT',
+      message: 'UNIQUE constraint failed: bet_boost_locks.brand_id, bet_boost_locks.bet_id',
+    });
+    const crossBrand = await boostLockService.lockBoost(input);
+    expect(crossBrand.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
 
     // Status is only ever changed inside the lock transaction, never in the fallback.
     expect(userRewardRepository.updateStatus).not.toHaveBeenCalled();
@@ -456,7 +490,7 @@ describe('boostLockService', () => {
   it('returns lock record by bet id', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
 
-    const result = await boostLockService.getLockByBetId('bet-1');
+    const result = await boostLockService.getLockByBetId('default', 'bet-1');
     expect(result.success).toBe(true);
     expect(result.data?.id).toBe('lock-1');
   });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CURRENCY_PATTERN, MAX_BONUS_CAP_MINOR, MAX_STAKE_MINOR } from '../money/minorUnits';
 
 const selectionTypeSchema = z.enum(['STANDARD', 'SGP_COMPOSITE', 'SGP_LEG']);
 
@@ -6,10 +7,46 @@ const selectionTypeSchema = z.enum(['STANDARD', 'SGP_COMPOSITE', 'SGP_LEG']);
 export const MAX_IDENTIFIER_LENGTH = 255;
 export const MAX_SELECTION_ODDS = 10_000;
 export const MAX_SELECTIONS = 100;
-/** Interim bound on settlement winnings until server-side total return lands. */
-export const MAX_WINNINGS = 1_000_000_000;
+/** Settlement correction reason length. */
+export const MAX_RESETTLE_REASON_LENGTH = 500;
+
+/** Reward validity bounds: 1 minute to 365 days. */
+export const MIN_REWARD_VALIDITY_SECONDS = 60;
+export const MAX_REWARD_VALIDITY_SECONDS = 31_536_000;
+export const MAX_BONUS_CAP_CURRENCIES = 50;
 
 const identifierSchema = z.string().min(1).max(MAX_IDENTIFIER_LENGTH);
+
+/** Brand identifier: 1-64 characters of letters, digits, underscore or hyphen. */
+export const brandIdSchema = z.string().min(1).max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, 'brand_id may only contain letters, digits, underscore and hyphen');
+
+/** ISO-4217 style currency code: three uppercase letters. */
+export const currencySchema = z.string().regex(CURRENCY_PATTERN, 'currency must be a 3-letter uppercase ISO-4217 code');
+
+/** Per-currency bonus cap in minor units: at least one positive integer entry. */
+export const maxBonusMinorSchema = z.record(
+  currencySchema,
+  z.number().int().positive().max(MAX_BONUS_CAP_MINOR)
+).refine((map) => Object.keys(map).length >= 1, {
+  message: 'max_bonus_minor needs at least one currency',
+}).refine((map) => Object.keys(map).length <= MAX_BONUS_CAP_CURRENCIES, {
+  message: `max_bonus_minor allows at most ${MAX_BONUS_CAP_CURRENCIES} currencies`,
+});
+
+const rewardValiditySecondsSchema = z.number().int()
+  .min(MIN_REWARD_VALIDITY_SECONDS)
+  .max(MAX_REWARD_VALIDITY_SECONDS);
+
+/** Query string of the brand-scoped GET endpoints. */
+export const brandQuerySchema = z.object({
+  brand_id: brandIdSchema,
+});
+
+/** Optional brand filter for the admin profile list. */
+export const optionalBrandQuerySchema = z.object({
+  brand_id: brandIdSchema.optional(),
+});
 const selectionTextSchema = z.string().max(MAX_IDENTIFIER_LENGTH);
 
 // Path parameter schemas
@@ -25,10 +62,28 @@ export const betIdParamsSchema = z.object({
   betId: identifierSchema,
 });
 
+/** Decimal places settlement can represent exactly (the settlement calculator scales odds by 10^6). */
+const MAX_ODDS_DECIMALS = 6;
+const SHORTEST_DECIMAL_PATTERN = /^(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/;
+
+/**
+ * True when the number has at most 6 decimal places, judged exactly as the
+ * settlement calculator judges it: from the shortest round-trip string
+ * (`String(value)`), so 2.123456 passes and 2.1234567 does not.
+ */
+function hasAtMostSettlementDecimals(value: number): boolean {
+  const match = SHORTEST_DECIMAL_PATTERN.exec(String(value));
+  if (!match) return false;
+  const exponent = match[3] === undefined ? 0 : Number(match[3]);
+  return (match[2] ?? '').length - exponent <= MAX_ODDS_DECIMALS;
+}
+
 // Selection schema
 export const selectionSchema = z.object({
   id: identifierSchema,
-  odds: z.number().positive().max(MAX_SELECTION_ODDS),
+  odds: z.number().positive().max(MAX_SELECTION_ODDS).refine(hasAtMostSettlementDecimals, {
+    message: `odds must have at most ${MAX_ODDS_DECIMALS} decimal places`,
+  }),
   name: selectionTextSchema.optional(),
   market: selectionTextSchema.optional(),
   event: selectionTextSchema.optional(),
@@ -58,11 +113,13 @@ export const selectionSchema = z.object({
 // Ticket schema
 export const ticketSchema = z.object({
   selections: z.array(selectionSchema).min(1).max(MAX_SELECTIONS),
+  /** Deprecated and ignored: the stake is the integer stake_minor sent at opt-in. */
   stake: z.number().positive().optional(),
 });
 
 // Reward Profile schemas
 export const createRewardProfileSchema = z.object({
+  brand_id: brandIdSchema,
   name: z.string().min(1).max(255),
   description: z.string().max(1000).optional(),
   min_selections: z.number().int().min(1).max(20),
@@ -77,6 +134,8 @@ export const createRewardProfileSchema = z.object({
   effective_min_floor_rate: z.number().min(0).max(1).default(0.35),
   ride_mode: z.enum(['WAVES', 'LINEAR']).default('WAVES'),
   ride_duration_seconds: z.number().int().min(1).max(86400),
+  max_bonus_minor: maxBonusMinorSchema,
+  reward_validity_seconds: rewardValiditySecondsSchema,
 }).refine(data => data.min_boost_pct <= data.max_boost_pct, {
   message: 'min_boost_pct must be less than or equal to max_boost_pct',
   path: ['min_boost_pct'],
@@ -114,7 +173,14 @@ export const updateRewardProfileSchema = z.object({
   effective_min_floor_rate: z.number().min(0).max(1).optional(),
   ride_mode: z.enum(['WAVES', 'LINEAR']).optional(),
   ride_duration_seconds: z.number().int().min(1).max(86400).optional(),
+  max_bonus_minor: maxBonusMinorSchema.optional(),
+  reward_validity_seconds: rewardValiditySecondsSchema.optional(),
   is_active: z.boolean().optional(),
+  /** Present only to reject it: a profile never changes brand. */
+  brand_id: z.unknown().optional(),
+}).refine(data => data.brand_id === undefined, {
+  message: 'brand_id is immutable and cannot be updated',
+  path: ['brand_id'],
 }).refine(data => {
   if (
     data.max_eligibility_selection_weight === undefined
@@ -161,15 +227,65 @@ export const lockRequestSchema = z.object({
 export const startRideSchema = z.object({
   user_id: identifierSchema,
   bet_id: identifierSchema,
+  /** Integer minor units, e.g. 1000 = 10.00 EUR. */
+  stake_minor: z.number().int().positive().max(MAX_STAKE_MINOR),
+  currency: currencySchema,
   ticket: ticketSchema,
+}).superRefine((data, ctx) => {
+  // Settlement reports a result per selection_id, so ids must identify one selection.
+  const seen = new Set<string>();
+  data.ticket.selections.forEach((selection, index) => {
+    if (seen.has(selection.id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `selection id ${selection.id} is used more than once; selection ids must be unique`,
+        path: ['ticket', 'selections', index, 'id'],
+      });
+    }
+    seen.add(selection.id);
+  });
 });
 
-// Settlement schema
-export const settlementRequestSchema = z.object({
-  bet_id: identifierSchema,
-  outcome: z.enum(['WIN', 'LOSS', 'VOID', 'CASHOUT']),
-  winnings: z.number().finite().min(0).max(MAX_WINNINGS),
+// Settlement schemas
+const settlementLegSchema = z.object({
+  selection_id: identifierSchema,
+  result: z.enum(['WON', 'LOST', 'PUSH', 'CANCELLED']),
 });
+
+const settlementBodyShape = {
+  brand_id: brandIdSchema,
+  bet_id: identifierSchema,
+  outcome: z.enum(['SETTLED', 'CASHOUT', 'CANCELLED']),
+  /** Required (one per bet leg) for SETTLED, forbidden otherwise. */
+  legs: z.array(settlementLegSchema).min(1).max(MAX_SELECTIONS).optional(),
+};
+
+function refineSettlementLegs(
+  data: { outcome: 'SETTLED' | 'CASHOUT' | 'CANCELLED'; legs?: unknown[] },
+  ctx: z.RefinementCtx
+): void {
+  if (data.outcome === 'SETTLED' && data.legs === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'legs are required when outcome is SETTLED',
+      path: ['legs'],
+    });
+  }
+  if (data.outcome !== 'SETTLED' && data.legs !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `legs are not allowed when outcome is ${data.outcome}`,
+      path: ['legs'],
+    });
+  }
+}
+
+export const settlementRequestSchema = z.object(settlementBodyShape).superRefine(refineSettlementLegs);
+
+export const resettlementRequestSchema = z.object({
+  ...settlementBodyShape,
+  reason: z.string().trim().min(1).max(MAX_RESETTLE_REASON_LENGTH),
+}).superRefine(refineSettlementLegs);
 
 // Simulation schema
 export const simulationRequestSchema = z.object({
@@ -189,5 +305,7 @@ export type EligibilityRequestBody = z.infer<typeof eligibilityRequestSchema>;
 export type QuoteRequestBody = z.infer<typeof quoteRequestSchema>;
 export type LockRequestBody = z.infer<typeof lockRequestSchema>;
 export type SettlementRequestBody = z.infer<typeof settlementRequestSchema>;
+export type ResettlementRequestBody = z.infer<typeof resettlementRequestSchema>;
 export type SimulationRequestBody = z.infer<typeof simulationRequestSchema>;
+export type BrandQuery = z.infer<typeof brandQuerySchema>;
 export type StartRideBody = z.infer<typeof startRideSchema>;

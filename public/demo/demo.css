@@ -117,7 +117,9 @@ button#createProfile:disabled, button#grantReward:disabled { background: #f1f2f7
 .ticket-preview summary { color: var(--accent-dark); cursor: pointer; padding: 4px 0; }
 #oddsList { display: block; margin-top: 8px; padding: 12px; background: var(--surface-soft); border-radius: 8px; line-height: 1.6; overflow-wrap: anywhere; }
 .exclude-inline-field { grid-column: auto; }
-.ticket-identity { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) 80px auto; }
+.ticket-identity-main { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.3fr); }
+.ticket-identity-amounts { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) 80px auto; margin-top: 10px; }
+.ticket-identity input[maxlength="3"] { text-transform: uppercase; }
 .ticket-ride-link { margin-left: auto; font-size: 12px; font-weight: 600; }
 .ride-card, .ride-chart-card { padding: 20px 22px; }
 .ride-chart-card { display: flex; flex-direction: column; }
@@ -248,6 +250,7 @@ pre { font: 11px/1.7 var(--mono); margin: 0; border-top: 1px solid var(--line); 
   .boost-bar, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .selection-list { grid-template-columns: 1fr; }
   .ticket-identity { grid-template-columns: 1fr 1fr; }
+  .ticket-identity-main .field:last-child { grid-column: 1 / -1; }
   .selection-row.is-excluded .selection-row-grid { grid-template-columns: minmax(75px, 1fr) minmax(0, 1.6fr); }
   .exclude-inline-field { grid-column: 1 / -1; }
   .selection-row input, .selection-row select { font-size: 14px; }

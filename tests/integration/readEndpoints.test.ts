@@ -14,7 +14,7 @@ describe('Read Endpoints Integration Tests', () => {
   });
 
   beforeEach(async () => {
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -34,6 +34,9 @@ describe('Read Endpoints Integration Tests', () => {
         min_boost_pct: 0.05,
         max_boost_pct: 0.5,
         ride_duration_seconds: 15,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
 
     expect(profileRes.status).toBe(201);
@@ -64,6 +67,8 @@ describe('Read Endpoints Integration Tests', () => {
       .post(`/api/rewards/${rewardId}/opt-in`)
       .set('X-API-Key', API_KEY)
       .send({
+        stake_minor: 1000,
+        currency: 'EUR',
         user_id: userId,
         bet_id: betId,
         ticket: { selections },
@@ -104,7 +109,7 @@ describe('Read Endpoints Integration Tests', () => {
     const rewardIdTwo = await grantReward(userId, profileId);
 
     const rewardsRes = await request(app)
-      .get(`/api/rewards/user/${userId}`)
+      .get(`/api/rewards/user/${userId}?brand_id=brand-a`)
       .set('X-API-Key', API_KEY);
 
     expect(rewardsRes.status).toBe(200);
@@ -113,7 +118,7 @@ describe('Read Endpoints Integration Tests', () => {
     expect(rewardIds).toEqual(expect.arrayContaining([rewardIdOne, rewardIdTwo]));
 
     const activeRes = await request(app)
-      .get(`/api/rewards/user/${userId}/active`)
+      .get(`/api/rewards/user/${userId}/active?brand_id=brand-a`)
       .set('X-API-Key', API_KEY);
 
     expect(activeRes.status).toBe(200);
@@ -131,7 +136,7 @@ describe('Read Endpoints Integration Tests', () => {
     const createdLock = await startRideAndLock(userId, rewardId, betId);
 
     const lockRes = await request(app)
-      .get(`/api/boost/lock/${betId}`)
+      .get(`/api/boost/lock/${betId}?brand_id=brand-a`)
       .set('X-API-Key', API_KEY);
 
     expect(lockRes.status).toBe(200);
@@ -152,7 +157,7 @@ describe('Read Endpoints Integration Tests', () => {
     const expectedHistorical = { ...createdLock };
     delete expectedHistorical.maximum_model;
     const historicalRead = await request(app)
-      .get(`/api/boost/lock/${betId}`).set('X-API-Key', API_KEY);
+      .get(`/api/boost/lock/${betId}?brand_id=brand-a`).set('X-API-Key', API_KEY);
     expect(historicalRead.status).toBe(200);
     expect(historicalRead.body).toEqual(expectedHistorical);
     expect(historicalRead.body).not.toHaveProperty('maximum_model');
@@ -174,21 +179,29 @@ describe('Read Endpoints Integration Tests', () => {
     const settleRes = await request(app)
       .post('/api/settlement')
       .set('X-API-Key', API_KEY)
-      .send({
-        bet_id: betId,
-        outcome: 'WIN',
-        winnings: 100,
-      });
+      .send({ brand_id: 'brand-a', bet_id: betId, outcome: 'CASHOUT' });
 
     expect(settleRes.status).toBe(201);
 
-    const getSettlementRes = await request(app)
+    const missingBrand = await request(app)
       .get(`/api/settlement/${betId}`)
+      .set('X-API-Key', API_KEY);
+    expect(missingBrand.status).toBe(400);
+    expect(missingBrand.body.code).toBe('VALIDATION_ERROR');
+
+    const getSettlementRes = await request(app)
+      .get(`/api/settlement/${betId}?brand_id=brand-a`)
       .set('X-API-Key', API_KEY);
 
     expect(getSettlementRes.status).toBe(200);
-    expect(getSettlementRes.body.bet_id).toBe(betId);
-    expect(getSettlementRes.body.outcome).toBe('WIN');
+    expect(getSettlementRes.body).toEqual(settleRes.body);
+    expect(getSettlementRes.body.bet_result).toBe('CASHED_OUT');
     expect(getSettlementRes.body.locked_boost_pct).toBeGreaterThan(0);
+
+    const otherBrand = await request(app)
+      .get(`/api/settlement/${betId}?brand_id=brand-b`)
+      .set('X-API-Key', API_KEY);
+    expect(otherBrand.status).toBe(404);
+    expect(otherBrand.body.code).toBe('SETTLEMENT_NOT_FOUND');
   });
 });

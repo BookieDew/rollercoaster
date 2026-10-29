@@ -14,7 +14,7 @@ describe('Public Endpoint Error Path Integration Tests', () => {
   });
 
   beforeEach(async () => {
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -47,13 +47,13 @@ describe('Public Endpoint Error Path Integration Tests', () => {
 
   it('returns 404 for lock and settlement reads when bet is missing', async () => {
     const lockRes = await request(app)
-      .get('/api/boost/lock/missing-bet')
+      .get('/api/boost/lock/missing-bet?brand_id=brand-a')
       .set('X-API-Key', API_KEY);
     expect(lockRes.status).toBe(404);
     expect(lockRes.body.error).toBe('Not Found');
 
     const settlementRes = await request(app)
-      .get('/api/settlement/missing-bet')
+      .get('/api/settlement/missing-bet?brand_id=brand-a')
       .set('X-API-Key', API_KEY);
     expect(settlementRes.status).toBe(404);
     expect(settlementRes.body.error).toBe('Not Found');
@@ -64,13 +64,20 @@ describe('Public Endpoint Error Path Integration Tests', () => {
       .post('/api/settlement')
       .set('X-API-Key', API_KEY)
       .send({
+        brand_id: 'brand-a',
         bet_id: 'bet-1',
         outcome: 'NOT_REAL',
-        winnings: -1,
       });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+
+    const legacy = await request(app)
+      .post('/api/settlement')
+      .set('X-API-Key', API_KEY)
+      .send({ bet_id: 'bet-1', outcome: 'WIN', winnings: 100 });
+    expect(legacy.status).toBe(400);
+    expect(legacy.body.code).toBe('VALIDATION_ERROR');
   });
 
   it('returns reward/profile not found branches in reward controller', async () => {
@@ -93,14 +100,14 @@ describe('Public Endpoint Error Path Integration Tests', () => {
 
   it('returns empty active reward and reward list for user with no rewards', async () => {
     const listRes = await request(app)
-      .get('/api/rewards/user/empty-user')
+      .get('/api/rewards/user/empty-user?brand_id=brand-a')
       .set('X-API-Key', API_KEY);
     expect(listRes.status).toBe(200);
     expect(listRes.body.count).toBe(0);
     expect(Array.isArray(listRes.body.rewards)).toBe(true);
 
     const activeRes = await request(app)
-      .get('/api/rewards/user/empty-user/active')
+      .get('/api/rewards/user/empty-user/active?brand_id=brand-a')
       .set('X-API-Key', API_KEY);
     expect(activeRes.status).toBe(200);
     expect(activeRes.body.active_reward).toBeNull();

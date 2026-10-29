@@ -158,6 +158,19 @@
               </div>
             </div>
 
+            <div class="subgroup">Reward limits</div>
+            <div class="grid grid-4">
+              <div class="field">
+                <label for="validityDays">Validity (days)</label>
+                <input id="validityDays" type="number" min="0.001" step="any" inputmode="decimal" value="7" title="How long a granted reward stays usable before it expires" />
+              </div>
+              <div class="field">
+                <label for="maxBonus">Max bonus</label>
+                <input id="maxBonus" inputmode="decimal" value="500.00" title="Bonus cap in the Currency chosen in step 02; sent as whole minor units" autocomplete="off" />
+              </div>
+            </div>
+            <p class="setup-help">The cap is stored for the Currency set in step 02. Amounts are sent as whole minor units (10.00 = 1000).</p>
+
             <div class="actions">
               <button id="createProfile">Create Profile</button>
             </div>
@@ -171,14 +184,28 @@
         <div class="panel-block card ticket-card" id="ticketSetup">
           <div class="card-head"><div><h2>Reward &amp; ticket</h2><p class="card-description">Choose which selections count.</p></div><span class="step-number">02</span></div>
           <div class="section-body">
-            <div class="grid ticket-identity">
+            <div class="grid ticket-identity ticket-identity-main">
               <div class="field">
                 <label for="userId">User ID</label>
                 <input id="userId" value="user-123" />
               </div>
               <div class="field">
+                <label for="brandId">Brand</label>
+                <input id="brandId" value="demo" maxlength="64" spellcheck="false" autocomplete="off" title="Letters, digits, underscore and hyphen. A player is (brand, user)." />
+              </div>
+              <div class="field">
                 <label for="betId">Bet ID</label>
                 <input id="betId" value="bet-123" />
+              </div>
+            </div>
+            <div class="grid ticket-identity ticket-identity-amounts">
+              <div class="field">
+                <label for="stake">Stake</label>
+                <input id="stake" inputmode="decimal" value="10.00" autocomplete="off" title="Sent as whole minor units: 10.00 = 1000" />
+              </div>
+              <div class="field">
+                <label for="currency">Currency</label>
+                <input id="currency" value="EUR" maxlength="3" autocapitalize="characters" spellcheck="false" autocomplete="off" title="Three-letter ISO-4217 code, e.g. EUR" />
               </div>
               <div class="field"><label for="selectionCount">Selections</label><input id="selectionCount" type="number" min="1" max="30" value="7" /></div>
               <div class="field"><button class="ghost" id="applySelectionCount">Build Rows</button></div>
@@ -714,6 +741,30 @@
         return document.getElementById(id).value;
       }
 
+      // Money is never a float: "10.00" becomes 1000 minor units by string arithmetic.
+      function parseMinorAmount(text, label) {
+        const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(String(text).trim());
+        const minor = match ? Number(match[1]) * 100 + Number((match[2] || '').padEnd(2, '0')) : 0;
+        if (!match || minor < 1 || !Number.isSafeInteger(minor)) {
+          throw new Error(`${label} must be an amount like 10.00 (up to two decimals, greater than zero).`);
+        }
+        return minor;
+      }
+
+      function currencyCode() {
+        const code = getValue('currency').trim().toUpperCase();
+        if (!/^[A-Z]{3}$/.test(code)) throw new Error('Currency must be a three-letter code such as EUR.');
+        return code;
+      }
+
+      function validitySeconds() {
+        const seconds = Math.round(Number(getValue('validityDays')) * 86400);
+        if (!Number.isFinite(seconds) || seconds < 60 || seconds > 31536000) {
+          throw new Error('Validity must be between 60 seconds and 365 days.');
+        }
+        return seconds;
+      }
+
       function setText(id, value) {
         document.getElementById(id).textContent = value || 'n/a';
       }
@@ -855,6 +906,9 @@
           effective_min_floor_rate: Number(getValue('effectiveMinFloorRate')),
           ride_mode: getValue('rideMode'),
           ride_duration_seconds: 3600,
+          brand_id: getValue('brandId').trim(),
+          max_bonus_minor: { [currencyCode()]: parseMinorAmount(getValue('maxBonus'), 'Max bonus') },
+          reward_validity_seconds: validitySeconds(),
         };
 
         const data = await apiFetch('/api/profiles', 'POST', payload);
@@ -887,7 +941,13 @@
         let data;
         let recovered = false;
         try {
-          data = await apiFetch(`/api/rewards/${rewardId}/opt-in`, 'POST', { user_id: identity.user_id, bet_id: identity.bet_id, ticket: buildTicket() });
+          data = await apiFetch(`/api/rewards/${rewardId}/opt-in`, 'POST', {
+            user_id: identity.user_id,
+            bet_id: identity.bet_id,
+            stake_minor: parseMinorAmount(getValue('stake'), 'Stake'),
+            currency: currencyCode(),
+            ticket: buildTicket(),
+          });
         } catch (error) {
           // A lost opt-in response can leave the server ride running. Recover only
           // when an authoritative quote confirms this exact reward/user/bet.

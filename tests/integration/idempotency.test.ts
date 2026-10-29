@@ -20,7 +20,7 @@ describe('Idempotency Integration Tests', () => {
 
   beforeEach(async () => {
     // Clean up tables
-    await db('settlement_records').del();
+    await db('bet_settlements').del();
     await db('bet_boost_locks').del();
     await db('ride_definitions').del();
     await db('user_rewards').del();
@@ -39,6 +39,9 @@ describe('Idempotency Integration Tests', () => {
         min_boost_pct: 0.05,
         max_boost_pct: 0.5,
         ride_duration_seconds: 3600,
+        brand_id: 'brand-a',
+        max_bonus_minor: { EUR: 50_000 },
+        reward_validity_seconds: 86_400,
       });
     profileId = profileRes.body.id;
 
@@ -59,6 +62,8 @@ describe('Idempotency Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'idempotent-user',
           bet_id: 'idempotent-bet-1',
           ticket: {
@@ -111,6 +116,8 @@ describe('Idempotency Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'idempotent-user',
           bet_id: 'idempotent-bet-2',
           ticket: {
@@ -161,7 +168,7 @@ describe('Idempotency Integration Tests', () => {
       const optInRes = await request(app)
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
-        .send({ user_id: 'idempotent-user', bet_id: betId, ticket: { selections } });
+        .send({ stake_minor: 1000, currency: 'EUR', user_id: 'idempotent-user', bet_id: betId, ticket: { selections } });
       expect(optInRes.status).toBe(200);
 
       // Pin evaluation inside the pre-crash window so the race, not ride timing, decides the outcome.
@@ -180,8 +187,8 @@ describe('Idempotency Integration Tests', () => {
     function interleaveCompetingLockAfterIdempotencyCheck(competing: () => Promise<request.Response>) {
       const competingResponse: { value?: request.Response } = {};
       const realFindByBetId = betBoostLockRepository.findByBetId.bind(betBoostLockRepository);
-      jest.spyOn(betBoostLockRepository, 'findByBetId').mockImplementationOnce(async (betId: string) => {
-        const before = await realFindByBetId(betId);
+      jest.spyOn(betBoostLockRepository, 'findByBetId').mockImplementationOnce(async (betId: string, brandId: string) => {
+        const before = await realFindByBetId(betId, brandId);
         competingResponse.value = await competing();
         return before;
       });
@@ -231,6 +238,8 @@ describe('Idempotency Integration Tests', () => {
         .post(`/api/rewards/${rewardId}/opt-in`)
         .set('X-API-Key', API_KEY)
         .send({
+          stake_minor: 1000,
+          currency: 'EUR',
           user_id: 'idempotent-user',
           bet_id: betId,
           ticket: {
@@ -252,49 +261,48 @@ describe('Idempotency Integration Tests', () => {
         });
     });
 
-    it('should return same settlement on duplicate settlement requests', async () => {
-      const settlePayload = {
-        bet_id: betId,
-        outcome: 'WIN',
-        winnings: 100,
-      };
+    const settledPayload = (legs: Array<{ selection_id: string; result: string }>) => ({
+      brand_id: 'brand-a',
+      bet_id: betId,
+      outcome: 'SETTLED',
+      legs,
+    });
 
-      // First settlement
+    it('should return same settlement on duplicate settlement requests, whatever the leg order', async () => {
+      const legs = [
+        { selection_id: 's1', result: 'WON' },
+        { selection_id: 's2', result: 'WON' },
+        { selection_id: 's3', result: 'PUSH' },
+      ];
+
       const firstRes = await request(app)
         .post('/api/settlement')
         .set('X-API-Key', API_KEY)
-        .send(settlePayload);
+        .send(settledPayload(legs));
 
       expect(firstRes.status).toBe(201);
-      const firstSettlementId = firstRes.body.settlement_id;
-      const firstBonusAmount = firstRes.body.bonus_amount;
+      expect(firstRes.body.bet_result).toBe('WON');
 
-      // Second settlement with same bet_id
+      // Same legs in another order: the normalized payload is identical.
       const secondRes = await request(app)
         .post('/api/settlement')
         .set('X-API-Key', API_KEY)
-        .send(settlePayload);
+        .send(settledPayload([...legs].reverse()));
 
       expect(secondRes.status).toBe(201);
-      expect(secondRes.body.settlement_id).toBe(firstSettlementId);
-      expect(secondRes.body.bonus_amount).toBe(firstBonusAmount);
+      expect(secondRes.body).toEqual(firstRes.body);
     });
 
     it('should only create one settlement record in database', async () => {
-      const settlePayload = {
-        bet_id: betId,
-        outcome: 'WIN',
-        winnings: 50,
-      };
+      const payload = { brand_id: 'brand-a', bet_id: betId, outcome: 'CASHOUT' };
 
-      // Make multiple requests
-      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(settlePayload);
-      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(settlePayload);
-      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(settlePayload);
+      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(payload);
+      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(payload);
+      await request(app).post('/api/settlement').set('X-API-Key', API_KEY).send(payload);
 
-      // Check database
-      const settlements = await db('settlement_records').where({ bet_id: betId });
+      const settlements = await db('bet_settlements').where({ bet_id: betId });
       expect(settlements).toHaveLength(1);
+      expect(await db('audit_logs').where({ action: 'SETTLE' })).toHaveLength(1);
     });
   });
 });

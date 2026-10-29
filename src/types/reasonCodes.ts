@@ -16,6 +16,7 @@ export enum ReasonCode {
 
   // Opt-in reason codes
   BET_ALREADY_BOUND = 'BET_ALREADY_BOUND',
+  CURRENCY_NOT_SUPPORTED = 'CURRENCY_NOT_SUPPORTED',
 
   // Lock reason codes
   BET_ALREADY_LOCKED = 'BET_ALREADY_LOCKED',
@@ -24,7 +25,10 @@ export enum ReasonCode {
   // Settlement reason codes
   BET_ALREADY_SETTLED = 'BET_ALREADY_SETTLED',
   SETTLEMENT_NOT_FOUND = 'SETTLEMENT_NOT_FOUND',
-  INVALID_OUTCOME = 'INVALID_OUTCOME',
+  /** A resettlement would revoke a replacement reward that has already been used. */
+  REPLACEMENT_ALREADY_USED = 'REPLACEMENT_ALREADY_USED',
+  /** The bet has no complete stake/currency/cap or ticket snapshot (legacy data). */
+  SETTLEMENT_UNAVAILABLE = 'SETTLEMENT_UNAVAILABLE',
 
   // Profile reason codes
   PROFILE_NOT_FOUND = 'PROFILE_NOT_FOUND',

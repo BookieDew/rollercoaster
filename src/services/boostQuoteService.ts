@@ -19,6 +19,7 @@ import {
 import type { BoostModelReport, Selection, QuoteResponse } from '../types/ticket';
 import type { RidePathPoint, MaximumModel } from '../types/ride';
 import { ReasonCode, type EligibilityReasonCode } from '../types/reasonCodes';
+import type { UserReward } from '../types/userReward';
 import { resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
 
 export interface QuoteInput {
@@ -75,14 +76,15 @@ export async function getQuote(
   }
 
   // Check reward status
-  if (reward.status === 'EXPIRED' || reward.status === 'USED') {
-    const code = reward.status === 'EXPIRED'
-      ? ReasonCode.REWARD_EXPIRED
-      : ReasonCode.REWARD_ALREADY_USED;
+  if (reward.status === 'USED') {
     return {
       success: true,
-      data: buildIneligibleResponse(code, 0, 0, 0),
+      data: buildIneligibleResponse(ReasonCode.REWARD_ALREADY_USED, 0, 0, 0),
     };
+  }
+
+  if (reward.status === 'EXPIRED') {
+    return quoteExpiredReward(reward, betId);
   }
 
   // Check if opted in
@@ -97,6 +99,44 @@ export async function getQuote(
       ),
     };
   }
+
+  return quoteEnteredRide(reward, betId);
+}
+
+/** True when the reward was opted into: a bet and its ticket are bound to it. */
+export function hasEnteredRide(reward: UserReward): boolean {
+  return reward.betId !== null && reward.betId !== undefined && reward.ticketSnapshot !== null;
+}
+
+/**
+ * An EXPIRED reward that entered a ride for this bet still reports that ride's
+ * terminal result (RIDE_CRASHED / RIDE_ENDED, with the usual terminal details),
+ * so expiry never hides a ride outcome. REWARD_EXPIRED is reported otherwise.
+ */
+async function quoteExpiredReward(
+  reward: UserReward,
+  betId: string
+): Promise<ServiceResult<QuoteResponse>> {
+  const expired: ServiceResult<QuoteResponse> = {
+    success: true,
+    data: buildIneligibleResponse(ReasonCode.REWARD_EXPIRED, 0, 0, 0),
+  };
+  if (!hasEnteredRide(reward) || reward.betId !== betId) {
+    return expired;
+  }
+  const evaluated = await quoteEnteredRide(reward, betId);
+  const code = evaluated.data?.reason_code;
+  return evaluated.success && (code === ReasonCode.RIDE_CRASHED || code === ReasonCode.RIDE_ENDED)
+    ? evaluated
+    : expired;
+}
+
+/** Quote of a reward whose ride was started (unchanged ride evaluation). */
+async function quoteEnteredRide(
+  reward: UserReward,
+  betId: string
+): Promise<ServiceResult<QuoteResponse>> {
+  const rewardId = reward.id;
 
   // Prefer opt-in math inputs; old rides retain the explicit profile fallback.
   const rideMath = await resolveRideMathSnapshot(reward);

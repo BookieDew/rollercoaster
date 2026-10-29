@@ -18,8 +18,8 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 4) User opts in to start the ride
 5) Boost updates in real time (no countdown)
 6) User locks boost by stopping the ride
-7) On win, bonus payout = winnings * locked boost
-8) On loss, bonus = 0; crash/end prevents a new lock but cannot alter an existing lock
+7) The sportsbook settles the locked bet with leg results (`POST /api/settlement`); the server computes total return and bonus = total return * locked boost (capped per currency) from the frozen snapshots
+8) Lost / cashed-out / all-push bets pay 0; a cancelled bet returns the token; corrections use `POST /api/settlement/resettle`. Crash/end prevents a new lock but cannot alter an existing lock
 
 ## Key behaviors
 - Ride is deterministic per reward: the seed is 32 random bytes (hex) generated at grant and stored; saved seed, inputs, and checkpoints support replay. It is not derivable from public IDs and is never returned by the API. (`generateSeed` remains in the generator but is no longer used for rewards.)
@@ -32,7 +32,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - New v3 WAVES uses a domain-separated phase draw with UP/PEAK/DOWN targets 50/20/30 only for feasible repaired rides. Early/timing-constrained, flat/rounding-degenerate, and no-crash rides keep their baseline trajectory and separate diagnostic status. Historical generator phase labels describe checkpoint shaping, not guaranteed effective near-crash direction.
 - Active boost quotes return no countdown or future path/schedule, and withhold `theoretical_max_boost_pct` (null) while the ride is live; terminal quotes and locks keep it. Reward/opt-in responses return `end_time: null` until the reward is `USED` or `EXPIRED`.
 - Grant, opt-in, lock and settlement each write atomically (`runInTransaction` in `src/db/repositories/transaction.ts`; the transaction starts lazily on the first scoped query). Opt-in claims `GRANTED` → `ENTERED` and lock `ENTERED` → `USED` with conditional updates.
-- One bet binds to one reward (409 `BET_ALREADY_BOUND`, enforced in the opt-in transaction until a brand-scoped unique index lands); lock replay requires the same reward and owner (else 409 `BET_ALREADY_LOCKED`); a conflicting settlement replay is 409 `BET_ALREADY_SETTLED`.
+- One bet binds to one reward **per brand**: `(brand_id, bet_id)` is unique (409 `BET_ALREADY_BOUND`; the opt-in transaction checks it and the unique index `user_rewards_brand_id_bet_id_unique` backs it, so a race that reaches the index is also 409, never 500); lock replay requires the same reward and owner (else 409 `BET_ALREADY_LOCKED`); locks are unique per `(brand_id, bet_id)` (`bet_boost_locks_brand_id_bet_id_unique`); a conflicting settlement replay is 409 `BET_ALREADY_SETTLED`.
 - Ticket strength weighting is `75%` qualifying selection count and `25%` combined odds.
 - Effective minimum boost can rise with ticket quality when max-access targets are configured (`effective_min_floor_rate`, default `0.35`). The profile max-access weights are separate from ticket-strength weights.
 - Generation uses a two-second minimum peak-delay shaping parameter where feasible; this is not a guarantee that the final clamped payout has no earlier plateau.
@@ -47,6 +47,24 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
   - `sgp_group_id` required for `SGP_COMPOSITE` and `SGP_LEG`
   - `SGP_LEG` selections are always excluded from qualification math
   - duplicate `SGP_COMPOSITE` entries in the same `sgp_group_id` are ignored
+
+## Brands, money, caps and validity (Phase 1a)
+- `brand_id` (`^[A-Za-z0-9_-]{1,64}$`) is required on profile create and immutable. Rewards copy it from the profile at grant; locks copy it from the reward. Player = `(brand_id, user_id)`, bet = `(brand_id, bet_id)`. Legacy rows are brand `default`.
+- Brand-scoped reads: `GET /api/rewards/user/:userId[/active]`, `GET /api/boost/lock/:betId` and `GET /api/settlement/:betId` require `?brand_id=`. Quote, lock and opt-in take the brand from the reward; settle/resettle carry `brand_id` in the body. `betBoostLockRepository.findByBetId(betId, brandId)` always takes the brand; migration 015 replaced `unique(bet_id)` with `unique(brand_id, bet_id)`, so each brand can lock its own `bet_id`.
+- Money: integer minor units + `^[A-Z]{3}$`, no floats (`src/money/minorUnits.ts`). Opt-in requires `stake_minor` (1..1e12) and `currency`; `ticket.stake` is deprecated and ignored. Rounding for derived amounts is half-up.
+- Profile `max_bonus_minor` (currency to positive integer, at least one) and `reward_validity_seconds` (60..31,536,000) are required on create and updatable (future grants/opt-ins only). Opt-in copies `stake_minor`, `currency` and `bonus_cap_minor` onto the reward, so profile edits never change an in-flight bet. A currency missing from the map is 422 `CURRENCY_NOT_SUPPORTED`.
+- `valid_until = granted_at + reward_validity_seconds`; legacy rows are `NULL` (no expiry). Opt-in after `valid_until` expires the reward (conditional update + audit) and returns 422 `REWARD_EXPIRED`.
+- `rewardExpiryService.expireRewards(now, graceSeconds = RIDE_EXPIRY_GRACE_SECONDS)` is idempotent (conditional updates, one audit row per changed reward): GRANTED past `valid_until`, and ENTERED whose ride had already ended or crashed at `now - grace` (existing `calculateElapsedPct`/`hasRideEnded` evaluated at that instant, no re-derived math; grace default 900 s), become EXPIRED. Quote and lock for an EXPIRED reward that entered a ride for that bet still run the ride evaluation and report `RIDE_CRASHED`/`RIDE_ENDED` with unchanged details; only rewards that never entered a ride (or another bet, or an expired ride that is somehow not over) get `REWARD_EXPIRED`, and such a reward is never locked. Triggers: admin `POST /api/admin/rewards/expire` and an in-process interval `REWARD_EXPIRY_INTERVAL_SECONDS` (default 300, 0 disables) started from `startServer()` only, never in test, cleared when the HTTP server closes.
+- Migrations 012-014 are data preserving: 012 adds columns/indexes (defaults `default`, `{}`, NULL), 013 renames historical duplicate bet bindings (`<bet_id>~legacy-<first 8 of reward id>`, keeper = the reward owning the lock or the earliest, one `LEGACY_BET_ID_RENAMED` audit row each; `down` restores them), 014 creates the unique index.
+- Migration 015 drops the legacy `settlement_records` table **only when it is empty** (otherwise it aborts with instructions and changes nothing), replaces the lock index with `unique(brand_id, bet_id)` (dropping the redundant non-unique `bet_boost_locks_brand_id_bet_id_index`; `down` recreates it) and creates `bet_settlements`. Its `down` restores both, refusing while `bet_settlements` has rows or a `bet_id` is locked in two brands.
+
+## Settlement (Phase 1a)
+- `POST /api/settlement` `{brand_id, bet_id, outcome: SETTLED|CASHOUT|CANCELLED, legs?}`; `legs` (one `{selection_id, result: WON|LOST|PUSH|CANCELLED}` per bet leg = every stored selection except `SGP_LEG`) is required for SETTLED and forbidden otherwise. Opt-in now rejects duplicate selection ids (400) so every leg can be matched.
+- `settlementService` loads the lock by `(brand_id, bet_id)` (404 `LOCK_NOT_FOUND` for opted-in-but-unlocked bets), the reward's whole stored ticket and money snapshot (missing stake/currency/cap/ticket or lock minimums: 422 `SETTLEMENT_UNAVAILABLE`, never a default), and calls the pure BigInt calculator `src/computations/settlementCalculator.ts` (frozen). Calculator `INVALID_LEGS` maps to 400 `VALIDATION_ERROR` with problems in `details`; `INVALID_INPUT` (stored data, no client cause) to 422 `SETTLEMENT_UNAVAILABLE`. There is no size limit: the calculator returns the total return as an exact BigInt (sportsbook returns can exceed 2^53; max payout is the sportsbook's responsibility), the service carries it as a decimal-integer string, and the API returns `total_return_minor` as that string; the bonus is capped, so it stays a number. `selectionSchema` rejects odds with more than 6 decimal places (judged from `String(odds)`, like the calculator) at opt-in and lock.
+- `bet_settlements`: one row per revision; bigint money columns except `total_return_minor`, which is exact decimal-integer text; `unique(lock_id, revision)` plus a partial unique index on `lock_id WHERE is_current` (one current revision per lock). `legs` stores the normalized legs (sorted by `selection_id`); replay compares the normalized `(outcome, legs)`: identical returns the current revision (201), different is 409 `BET_ALREADY_SETTLED`.
+- Resettle `POST /api/settlement/resettle` (+ `reason` 1-500) supersedes revision n with a conditional `is_current` update and inserts n+1 in one transaction with its audit row; the response adds `previous_bonus_minor` / `bonus_delta_minor` (null on revision 1). Replay only matches the current revision, so the original `POST /settlement` after a resettle is 409. A lost race (conditional update or unique violation) re-reads: identical payload is a replay, otherwise 409.
+- Replacement tokens (`rewardEntitlementService.issueReplacementReward`): CANCELLED issues a new GRANTED reward (fresh seed, same brand/user/profile, `replaces_reward_id`, copied `valid_until`, `GRANT_REPLACEMENT` audit) unless the original validity has passed (`replacement_status: NOT_ISSUED_EXPIRED`). Leaving CANCELLED revokes a still-GRANTED replacement (conditional `GRANTED -> EXPIRED`, `EXPIRE` audit with reason `REVOKED_BY_RESETTLEMENT`); if the conditional revoke loses a race the reward is re-read in the same transaction (used: 409, expired/gone unused: treated as revoked); a replacement that was already opted into makes the resettle 409 `REPLACEMENT_ALREADY_USED` with nothing changed. `replacement_status` is derived from `bet_result` and `replacement_reward_id`.
+- Reward entity fields added in this phase (`brandId`, `validUntil`, money snapshot, `replacesRewardId`) are typed optional only so older fixtures type-check; repositories always set them.
 
 ## Authoritative math and response semantics
 
@@ -123,7 +141,8 @@ remain subjects of curve review; no universal 2–4-peak claim is made.
 - `src/services/rewardOptInService.ts` (precheck on ride start and ride definition creation)
 - `src/services/boostQuoteService.ts` (dynamic quote)
 - `src/services/boostLockService.ts` (lock + snapshot)
-- `src/services/settlementService.ts` (bonus settlement)
+- `src/computations/settlementCalculator.ts` (pure BigInt settlement math)
+- `src/services/settlementService.ts` (settle / resettle / replacement tokens)
 - `src/middleware/authMiddleware.ts` (API key + HMAC auth, admin endpoint gate)
 
 ## Profile model (operator-tunable)
@@ -135,6 +154,7 @@ remain subjects of curve review; no universal 2–4-peak claim is made.
   - `max_eligibility_odds_weight`
   - `effective_min_floor_rate`
 - Ride mode: `ride_mode` = `WAVES | LINEAR`
+- Money and lifetime: `brand_id` (immutable), `max_bonus_minor`, `reward_validity_seconds`
 
 ## Running tests
 ```
