@@ -32,6 +32,7 @@
     "src/**/*",
     "migrations/**/*",
     "seeds/**/*",
+    "tools/**/*",
     "tests/**/*",
     "knexfile.ts"
   ],

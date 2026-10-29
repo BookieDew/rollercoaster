@@ -25,7 +25,8 @@
     "migrate": "knex migrate:latest",
     "migrate:prod": "node scripts/migrate-prod.js",
     "migrate:rollback": "knex migrate:rollback",
-    "seed": "knex seed:run"
+    "seed": "knex seed:run",
+    "ride-lab": "ts-node --transpile-only tools/ride-lab/run.ts"
   },
   "keywords": [
     "loyalty",
