@@ -4,6 +4,8 @@ import { rewardProfileRepository } from '../../src/db/repositories/rewardProfile
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
 import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
 import { settlementRepository } from '../../src/db/repositories/settlementRepository';
+import { userRewardRepository, BetAlreadyBoundError } from '../../src/db/repositories/userRewardRepository';
+import { runInTransaction } from '../../src/db/repositories/transaction';
 import type { LockSnapshot } from '../../src/types/betBoostLock';
 
 async function clearDb(): Promise<void> {
@@ -188,6 +190,53 @@ describe('repository coverage', () => {
         name: 'nope',
       });
       expect(missingUpdate).toBeNull();
+    });
+  });
+
+  describe('userRewardRepository', () => {
+    it('updates status conditionally and reports a lost compare-and-set as null', async () => {
+      const { rewardId } = await createRewardFixture();
+
+      const wrongFrom = await userRewardRepository.updateStatus(rewardId, 'USED', undefined, { fromStatus: 'GRANTED' });
+      expect(wrongFrom).toBeNull();
+      expect((await userRewardRepository.findById(rewardId))?.status).toBe('ENTERED');
+
+      const used = await userRewardRepository.updateStatus(rewardId, 'USED', undefined, { fromStatus: 'ENTERED' });
+      expect(used?.status).toBe('USED');
+
+      expect(await userRewardRepository.updateStatus('00000000-0000-0000-0000-000000000000', 'USED')).toBeNull();
+      const unconditional = await userRewardRepository.updateStatus(rewardId, 'EXPIRED', '2026-10-29T00:00:00.000Z');
+      expect(unconditional?.status).toBe('EXPIRED');
+      expect(unconditional?.optedInAt).toBe('2026-10-29T00:00:00.000Z');
+    });
+
+    it('refuses to bind a bet already attached to another reward, but rebinds the same reward', async () => {
+      const first = await createRewardFixture({ betId: 'bound-bet' });
+      const second = await createRewardFixture({ betId: 'other-bet' });
+      const start = new Date().toISOString();
+
+      await expect(userRewardRepository.updateRideStart(second.rewardId, start, start, 'bound-bet', { a: 1 }))
+        .rejects.toBeInstanceOf(BetAlreadyBoundError);
+      expect((await userRewardRepository.findById(second.rewardId))?.betId).toBe('other-bet');
+
+      const same = await userRewardRepository.updateRideStart(first.rewardId, start, start, 'bound-bet', { b: 2 });
+      expect(same?.betId).toBe('bound-bet');
+      expect(same?.ticketSnapshot).toEqual({ b: 2 });
+    });
+
+    it('creates and reads through a transaction scope, rolling back together', async () => {
+      const { profileId } = await createRewardFixture();
+      const now = new Date().toISOString();
+
+      await expect(runInTransaction(async (tx) => {
+        const created = await userRewardRepository.create({
+          userId: 'tx-user', profileVersionId: profileId, startTime: now, endTime: now, seed: 's',
+        }, tx);
+        expect((await userRewardRepository.findById(created.id, tx))?.userId).toBe('tx-user');
+        throw new Error('abort');
+      })).rejects.toThrow('abort');
+
+      expect(await userRewardRepository.findByUserId('tx-user')).toHaveLength(0);
     });
   });
 

@@ -1,10 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { rewardEntitlementService } from '../services/rewardEntitlementService';
 import { rewardOptInService } from '../services/rewardOptInService';
-import { grantRewardSchema, startRideSchema, eligibilityRequestSchema } from '../validation/schemas';
-import { toDTO } from '../types/userReward';
+import {
+  grantRewardSchema,
+  startRideSchema,
+  eligibilityRequestSchema,
+  idParamsSchema,
+  userIdParamsSchema,
+} from '../validation/schemas';
+import { toDTO, publicEndTime, type OptInResponse } from '../types/userReward';
 import { createApiError } from '../middleware/errorHandler';
-import { ReasonCode } from '../types/reasonCodes';
 
 /**
  * POST /rewards - Grant a reward entitlement to a user
@@ -45,7 +50,7 @@ export async function getReward(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
 
     const result = await rewardEntitlementService.getRewardById(id);
 
@@ -72,7 +77,7 @@ export async function getRewardsByUser(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { userId } = req.params;
+    const { userId } = userIdParamsSchema.parse(req.params);
 
     const result = await rewardEntitlementService.getRewardsByUserId(userId);
 
@@ -101,7 +106,7 @@ export async function optInToReward(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
     const validated = startRideSchema.parse(req.body);
 
     const result = await rewardOptInService.optIn(id, {
@@ -117,12 +122,13 @@ export async function optInToReward(
       );
     }
 
-    res.json({
+    const response: OptInResponse = {
       reward_id: result.data.reward.id,
       status: result.data.reward.status,
       ride_started: result.data.rideStarted,
-      end_time: result.data.reward.endTime,
-    });
+      end_time: publicEndTime(result.data.reward),
+    };
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -137,7 +143,7 @@ export async function getActiveReward(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { userId } = req.params;
+    const { userId } = userIdParamsSchema.parse(req.params);
 
     const result = await rewardEntitlementService.getActiveRewardForUser(userId);
 
@@ -168,7 +174,7 @@ export async function precheckEligibility(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
     const validated = eligibilityRequestSchema.parse(req.body);
 
     const result = await rewardOptInService.precheckEligibility(

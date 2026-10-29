@@ -3,11 +3,21 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { config } from '../config';
 
 export interface AuthenticatedRequest extends Request {
+  /**
+   * Label of the credential that authenticated the call: 'service' or 'admin' for
+   * API keys, 'hmac' for signatures. Never derived from secret material.
+   */
   apiKeyId?: string;
   rawBody?: string;
   authMethod?: 'api_key' | 'hmac';
 }
 
+/** HMAC-SHA256 hex digest; either letter case is accepted. */
+const SIGNATURE_PATTERN = /^[0-9a-f]{64}$/i;
+/** Epoch milliseconds, digits only (15 digits stay a safe integer). */
+const TIMESTAMP_PATTERN = /^\d{1,15}$/;
+
+/** Keyed by the canonical lowercase digest so letter-case variants cannot replay. */
 const replayCache = new Map<string, number>();
 
 function pruneReplayCache(now: number): void {
@@ -50,8 +60,9 @@ export function authMiddleware(
   // Check for API key authentication
   const apiKey = req.headers['x-api-key'] as string | undefined;
   if (apiKey) {
-    if (validateApiKey(apiKey)) {
-      req.apiKeyId = apiKey.substring(0, 8); // First 8 chars as identifier
+    const keyLabel = matchApiKey(apiKey);
+    if (keyLabel) {
+      req.apiKeyId = keyLabel;
       req.authMethod = 'api_key';
       return next();
     }
@@ -86,34 +97,24 @@ export function authMiddleware(
   });
 }
 
+/** Timing-safe comparison of a provided key against a configured secret. */
+function secretMatches(provided: Buffer, secret: string): boolean {
+  const expected = Buffer.from(secret);
+  return expected.length === provided.length && timingSafeEqual(expected, provided);
+}
+
 /**
- * Validates an API key against the configured secret.
- * In production, this would check against a database of valid keys.
+ * Matches an API key against the service and admin secrets and returns the label
+ * of the matching credential. Both secrets are always compared.
  */
-function validateApiKey(apiKey: string): boolean {
-  // Accept the standard API key and optional dedicated admin key.
-  try {
-    const candidates = [
-      config.api.keySecret,
-      config.api.adminKeySecret,
-    ];
-
-    for (const candidate of candidates) {
-      const expectedKey = Buffer.from(candidate);
-      const providedKey = Buffer.from(apiKey);
-
-      if (expectedKey.length !== providedKey.length) {
-        continue;
-      }
-
-      if (timingSafeEqual(expectedKey, providedKey)) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
+function matchApiKey(apiKey: string): 'service' | 'admin' | null {
+  const provided = Buffer.from(apiKey);
+  const isAdmin = secretMatches(provided, config.api.adminKeySecret);
+  const isService = secretMatches(provided, config.api.keySecret);
+  if (isAdmin) {
+    return 'admin';
   }
+  return isService ? 'service' : null;
 }
 
 /**
@@ -125,11 +126,14 @@ function validateHmacSignature(
   signature: string,
   timestamp: string
 ): boolean {
-  // Check timestamp is within 5 minutes
-  const requestTime = parseInt(timestamp, 10);
-  const now = Date.now();
+  if (!SIGNATURE_PATTERN.test(signature) || !TIMESTAMP_PATTERN.test(timestamp)) {
+    return false;
+  }
 
-  if (isNaN(requestTime) || Math.abs(now - requestTime) > config.api.hmacMaxSkewMs) {
+  // Check the timestamp is within the allowed skew
+  const requestTime = Number(timestamp);
+  const now = Date.now();
+  if (Math.abs(now - requestTime) > config.api.hmacMaxSkewMs) {
     return false;
   }
 
@@ -139,33 +143,23 @@ function validateHmacSignature(
   const body = (req as AuthenticatedRequest).rawBody ?? '';
   const message = `${timestamp}\n${method}\n${path}\n${body}`;
 
-  // Calculate expected signature
-  const expectedSignature = createHmac('sha256', config.api.hmacSecret)
+  // Both buffers are 32 bytes: the pattern check guarantees 64 hex characters.
+  const expected = createHmac('sha256', config.api.hmacSecret)
     .update(message)
-    .digest('hex');
-
-  try {
-    const expectedBuf = Buffer.from(expectedSignature, 'hex');
-    const providedBuf = Buffer.from(signature, 'hex');
-
-    if (expectedBuf.length !== providedBuf.length) {
-      return false;
-    }
-
-    if (!timingSafeEqual(expectedBuf, providedBuf)) {
-      return false;
-    }
-
-    pruneReplayCache(now);
-    if (replayCache.has(signature)) {
-      return false;
-    }
-
-    replayCache.set(signature, requestTime);
-    return true;
-  } catch {
+    .digest();
+  const provided = Buffer.from(signature, 'hex');
+  if (!timingSafeEqual(expected, provided)) {
     return false;
   }
+
+  const replayKey = expected.toString('hex');
+  pruneReplayCache(now);
+  if (replayCache.has(replayKey)) {
+    return false;
+  }
+
+  replayCache.set(replayKey, requestTime);
+  return true;
 }
 
 /**
@@ -185,17 +179,7 @@ export function adminOnlyMiddleware(
     return;
   }
 
-  try {
-    const provided = Buffer.from(apiKey);
-    const expected = Buffer.from(config.api.adminKeySecret);
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      res.status(403).json({
-        error: 'Forbidden',
-        message: 'Admin access required',
-      });
-      return;
-    }
-  } catch {
+  if (!secretMatches(Buffer.from(apiKey), config.api.adminKeySecret)) {
     res.status(403).json({
       error: 'Forbidden',
       message: 'Admin access required',

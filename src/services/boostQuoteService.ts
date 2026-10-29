@@ -357,6 +357,28 @@ export async function getQuote(
   };
 }
 
+/**
+ * Player-facing view of a quote. While a ride is live (eligible), the per-ride
+ * reference maximum would reveal the outcome (for LINEAR, the exact crash time),
+ * so it is withheld; terminal and ineligible quotes are returned unchanged.
+ */
+export function toPublicQuote(quote: QuoteResponse): QuoteResponse {
+  return quote.eligible ? { ...quote, theoretical_max_boost_pct: null } : quote;
+}
+
+/**
+ * Quote for the public API. `getQuote` remains the authoritative internal
+ * computation (used by audit/parity checks); only this redacted view is served.
+ */
+export async function getPublicQuote(
+  input: QuoteInput
+): Promise<ServiceResult<QuoteResponse>> {
+  const result = await getQuote(input);
+  return result.success && result.data
+    ? { ...result, data: toPublicQuote(result.data) }
+    : result;
+}
+
 function buildIneligibleResponse(
   reasonCode: EligibilityReasonCode,
   totalCount: number,
@@ -449,4 +471,5 @@ function roundToDecimals(value: number, decimals: number): number {
 
 export const boostQuoteService = {
   getQuote,
+  getPublicQuote,
 };

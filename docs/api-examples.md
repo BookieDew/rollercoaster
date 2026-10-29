@@ -1,6 +1,7 @@
 # Combo Boost Rollercoaster API - Example Payloads
 
-This document provides example JSON payloads for every API endpoint.
+This document provides example JSON payloads for every API endpoint. For setup,
+environment variables and running the service, see [README.md](../README.md).
 
 ## Authentication
 
@@ -38,8 +39,20 @@ HMAC_SHA256(signature_string, HMAC_SECRET) -> hex
 ```
 
 Notes:
+- `X-Signature` must be exactly 64 hexadecimal characters (the SHA-256 hex digest;
+  upper or lower case). Anything else is rejected with 401.
+- `X-Timestamp` must be digits only (no sign, decimal point or whitespace) and is
+  Unix epoch milliseconds; any other format is rejected with 401. A value in seconds
+  fails the time-window check.
 - Requests outside the allowed time window (default: ±5 minutes) are rejected.
-- Replays of the exact same signed request within the window are rejected.
+- Replays of the exact same signed request within the window are rejected, whatever
+  the letter case of the signature.
+
+### Demo UI
+
+The local demo at `/demo` is served only when `DEMO_UI_ENABLED` is true. It defaults
+to on in development/test and off in production; see [README.md](../README.md)
+for configuration.
 
 ---
 
@@ -221,6 +234,16 @@ For Same Game Parlay (SGP), use explicit selection metadata:
 - `SGP_LEG` entries never count toward qualifying selection count or combined odds
 - If multiple `SGP_COMPOSITE` entries share the same `sgp_group_id`, only the first counts
 
+Reward and profile `:id` path params must be UUIDs; `:userId` and `:betId` must be
+1–255 characters. `user_id`, `bet_id` and selection `id`/`name`/`market`/`event` are
+at most 255 characters, selection `odds` at most 10,000, and a ticket at most 100
+selections. Violations return 400 `VALIDATION_ERROR`.
+
+While a reward is playable (`GRANTED` or `ENTERED`), `end_time` is `null` in every
+reward response (grant, get, list, active, opt-in), so ride length is never a
+countdown. It is shown once the reward is `USED` or `EXPIRED`. The ride seed is
+generated server-side from 32 random bytes and is never returned.
+
 ### Grant Reward
 
 **POST** `/api/rewards`
@@ -240,7 +263,7 @@ For Same Game Parlay (SGP), use explicit selection metadata:
   "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "GRANTED",
   "start_time": "2024-01-15T12:00:00.000Z",
-  "end_time": "2024-01-15T12:00:09.563Z",
+  "end_time": null,
   "opted_in_at": null,
   "created_at": "2024-01-15T12:00:00.000Z",
   "updated_at": "2024-01-15T12:00:00.000Z"
@@ -299,7 +322,7 @@ For Same Game Parlay (SGP), use explicit selection metadata:
   "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "ENTERED",
   "start_time": "2024-01-15T12:05:00.000Z",
-  "end_time": "2024-01-15T12:05:09.563Z",
+  "end_time": null,
   "opted_in_at": "2024-01-15T12:05:00.000Z",
   "created_at": "2024-01-15T12:00:00.000Z",
   "updated_at": "2024-01-15T12:05:00.000Z"
@@ -355,8 +378,14 @@ resolved profile/mode, derived ride timing/math, phase model/diagnostics, and
 exact checkpoints in `ticketSnapshot.rideMath` (version 3). V3 checkpoint JSON and
 its interpolation metadata are authoritative. Version 1/2 snapshots preserve their
 original models; pre-snapshot rides retain their explicit legacy fallback. The
-snapshot is internal, not a new opt-in response field. Existing `end_time` is retained for compatibility; the demo
-does not use it to show a countdown or future curve.
+snapshot is internal, not a new opt-in response field. `end_time` is kept in the
+response shape for compatibility but is always `null` for a live ride.
+
+A `bet_id` already attached to a different reward (any status) is rejected with
+409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
+(`ALREADY_OPTED_IN`, `REWARD_ALREADY_USED`, `REWARD_EXPIRED`). The status change,
+bet binding, checkpoints and audit row are written in one transaction; a
+concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
 
 ```json
 // Request
@@ -395,7 +424,7 @@ does not use it to show a countdown or future curve.
   "reward_id": "660e8400-e29b-41d4-a716-446655440001",
   "status": "ENTERED",
   "ride_started": true,
-  "end_time": "2024-01-15T12:05:09.563Z"
+  "end_time": null
 }
 ```
 
@@ -410,7 +439,7 @@ recalculate the payout. Crash/end prevents a new lock and returns zero current b
 | Field | Meaning |
 |---|---|
 | `effective_min_boost_pct` / `effective_max_boost_pct` | Ticket-adjusted floor/cap; the cap is not promised on each ride |
-| `theoretical_max_boost_pct` | Model-dependent ride maximum/reference, not a guaranteed lockable payout |
+| `theoretical_max_boost_pct` | Model-dependent ride maximum/reference, not a guaranteed lockable payout. `null` in live (eligible) quotes; returned on terminal quotes, terminal lock errors and locks |
 | `maximum_model` | `WAVES_PRE_CRASH_SUPREMUM_V2` for new rides; `LEGACY_CHECKPOINT_MAX_V1` for legacy rides |
 | `ride_elapsed_seconds` | Authoritative sampled offset from start, with millisecond precision; eligible/terminal quotes and terminal lock error details |
 | `ride_stop_at_offset_seconds` | Successful lock's exact evaluation offset; pair it with `locked_boost_pct`, not interpolation of the sampled path |
@@ -464,7 +493,9 @@ The eligible example uses a controlled WAVES fixture: seed `audit-seed-42`, thre
 1.5 selections, eligibility minimums 3 selections / combined odds 3 / per-selection
 odds 1.2, profile min/max 0.05/1, no max-access targets, and default weights/floor.
 This fixture is independent of the earlier profile example; production reward
-seeds are assigned by the server. At 1.390 seconds, the response is:
+seeds are assigned by the server. At 1.390 seconds, the response is (the live
+quote withholds `theoretical_max_boost_pct`; the fixture's maximum, 0.290494, is
+revealed by the terminal quote and the lock below):
 
 ```json
 {
@@ -476,7 +507,7 @@ seeds are assigned by the server. At 1.390 seconds, the response is:
   "current_boost_pct": 0.251138,
   "effective_min_boost_pct": 0.05,
   "effective_max_boost_pct": 1,
-  "theoretical_max_boost_pct": 0.290494,
+  "theoretical_max_boost_pct": null,
   "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
   "ticket_strength": 0.042009,
   "boost_model": {
@@ -495,7 +526,7 @@ seeds are assigned by the server. At 1.390 seconds, the response is:
 ```
 
 For the same inputs in LINEAR, current boost at this instant is `0.170247`, with
-the same floor, cap, strength, and maximum. This shape difference is intentional.
+the same floor, cap, strength, and (withheld) maximum. This shape difference is intentional.
 
 Terminal response excerpts below omit ticket/model details and the full
 `ride_path` array. No-crash end for the fixture above, sampled at 2.781 seconds:
@@ -564,7 +595,10 @@ the full response also includes `boost_model` and `ride_path`:
 }
 ```
 
-Repeat lock returns the saved result. A lock attempted at/after crash or end fails
+Repeat lock returns the saved result only for the same reward and its owning
+user; the bet locked under a different reward or user returns 409
+`BET_ALREADY_LOCKED`. Lock insert, the `ENTERED` → `USED` transition and the audit
+row are one transaction. A lock attempted at/after crash or end fails
 with `RIDE_CRASHED` or `RIDE_ENDED`; its error `details` include zero current boost,
 `ride_elapsed_seconds`, schedule offsets, model metadata, and the full sampled path.
 
@@ -575,7 +609,8 @@ with `RIDE_CRASHED` or `RIDE_ENDED`; its error `details` include zero current bo
 HTTP 200 returns the saved lock fields shown above, including the stored
 `maximum_model` when available, `boost_model`, exact stop offset, and `ride_path`.
 It does not recalculate against the current profile. Historical locks without model
-metadata omit `maximum_model` on both read and repeated lock responses.
+metadata omit `maximum_model` on both read and repeated lock responses. A missing
+lock returns 404 with code `LOCK_NOT_FOUND`.
 
 ---
 
@@ -584,6 +619,13 @@ metadata omit `maximum_model` on both read and repeated lock responses.
 ### Settle Bet
 
 **POST** `/api/settlement`
+
+`winnings` must be a finite number from 0 to 1,000,000,000 (interim bound);
+anything else is 400 `VALIDATION_ERROR`. Replaying the same `bet_id` with the same
+`outcome` and `winnings` (compared at the stored 4-decimal precision) returns the
+existing record with 201; a different outcome or amount returns 409
+`BET_ALREADY_SETTLED` and the stored record is unchanged (resettlement is not yet
+supported). Concurrent settlements of one bet resolve to the same rule.
 
 ```json
 // Request - Win
@@ -626,6 +668,8 @@ metadata omit `maximum_model` on both read and repeated lock responses.
 ### Get Settlement
 
 **GET** `/api/settlement/:betId`
+
+A missing settlement returns 404 with code `SETTLEMENT_NOT_FOUND`.
 
 ```json
 // Response (200 OK)
@@ -739,7 +783,7 @@ active player chart.
 
 ## Error Responses
 
-All error responses follow this format:
+API error responses follow this format:
 
 ```json
 {
@@ -748,6 +792,13 @@ All error responses follow this format:
   "message": "Minimum 3 qualifying selections required, got 2"
 }
 ```
+
+`code` is always one of the reason codes below. Unexpected errors (including
+database errors) return 500 `INTERNAL_ERROR` with the generic message
+"An unexpected error occurred"; SQL and bound values are never returned.
+Malformed JSON returns 400 and an oversized body 413, both with
+`VALIDATION_ERROR`. Unknown `/api` routes return a JSON 404 `ROUTE_NOT_FOUND`.
+(401/403 authentication responses are produced by the auth middleware.)
 
 ### Reason Codes
 
@@ -762,14 +813,17 @@ All error responses follow this format:
 | `REWARD_ALREADY_USED` | Reward has been locked to a bet |
 | `NOT_OPTED_IN` | User hasn't opted into the reward |
 | `ALREADY_OPTED_IN` | User already opted in |
+| `BET_ALREADY_BOUND` | Bet ID is already attached to a different reward (409) |
 | `RIDE_CRASHED` | Ride reached its pre-end crash boundary |
 | `RIDE_ENDED` | Ride reached end time without an earlier crash event |
-| `BET_ALREADY_LOCKED` | Bet ID already has a lock |
+| `BET_ALREADY_LOCKED` | Bet ID is already locked for a different reward or user (409) |
 | `LOCK_NOT_FOUND` | No lock exists for bet |
-| `BET_ALREADY_SETTLED` | Bet already settled |
+| `BET_ALREADY_SETTLED` | Bet already settled with a different outcome or winnings (409) |
+| `SETTLEMENT_NOT_FOUND` | No settlement exists for bet (404) |
 | `INVALID_OUTCOME` | Settlement outcome is invalid |
 | `PROFILE_NOT_FOUND` | Profile ID doesn't exist |
 | `PROFILE_INACTIVE` | Profile is not active |
 | `INVALID_CONFIGURATION` | Reward profile configuration is invalid |
-| `VALIDATION_ERROR` | Request validation failed |
+| `VALIDATION_ERROR` | Request validation failed (also malformed JSON 400, oversized body 413) |
+| `ROUTE_NOT_FOUND` | Unknown API route (404) |
 | `INTERNAL_ERROR` | Unexpected server error |

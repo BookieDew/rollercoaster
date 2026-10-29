@@ -1,5 +1,6 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
+import { executorFor, type TransactionScope } from './transaction';
 
 export interface RideCheckpoint {
   id: string;
@@ -19,7 +20,10 @@ export interface CreateRideCheckpointInput {
 
 const TABLE = 'ride_definitions';
 
-export async function createMany(inputs: CreateRideCheckpointInput[]): Promise<RideCheckpoint[]> {
+export async function createMany(
+  inputs: CreateRideCheckpointInput[],
+  tx?: TransactionScope
+): Promise<RideCheckpoint[]> {
   const now = new Date().toISOString();
 
   const records = inputs.map((input) => ({
@@ -31,7 +35,8 @@ export async function createMany(inputs: CreateRideCheckpointInput[]): Promise<R
     created_at: now,
   }));
 
-  await db(TABLE).insert(records);
+  const q = await executorFor(tx);
+  await q(TABLE).insert(records);
   return records.map(mapToEntity);
 }
 

@@ -2,6 +2,13 @@ import type { Knex } from 'knex';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function seed(knex: Knex): Promise<void> {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'Refusing to run seeds with NODE_ENV=production: this sample seed deletes all '
+      + 'profiles, rewards, rides, locks and settlements. Seeds are for local development only.'
+    );
+  }
+
   // Clear existing entries
   await knex('settlement_records').del();
   await knex('bet_boost_locks').del();

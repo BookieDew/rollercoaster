@@ -218,12 +218,34 @@ describe('boostLockService', () => {
     jest.restoreAllMocks();
   });
 
-  it('returns existing lock for idempotent lock requests', async () => {
+  it('returns existing lock for idempotent lock requests from the owning user and reward', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({ status: 'USED' }));
 
     const result = await boostLockService.lockBoost(input);
     expect(result.success).toBe(true);
     expect(result.data?.lock_id).toBe('lock-1');
+  });
+
+  it('rejects an existing lock for another reward, another user or a missing reward with BET_ALREADY_LOCKED', async () => {
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
+    const findReward = jest.spyOn(userRewardRepository, 'findById')
+      .mockResolvedValueOnce(makeReward({ userId: 'someone-else', status: 'USED' }))
+      .mockResolvedValueOnce(null);
+    const create = jest.spyOn(betBoostLockRepository, 'create');
+
+    const otherReward = await boostLockService.lockBoost({ ...input, rewardId: 'reward-2' });
+    const otherUser = await boostLockService.lockBoost(input);
+    const missingReward = await boostLockService.lockBoost(input);
+
+    for (const result of [otherReward, otherUser, missingReward]) {
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
+      expect(result.data).toBeUndefined();
+    }
+    // A different reward never needs an ownership read.
+    expect(findReward).toHaveBeenCalledTimes(2);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('returns early failures for reward lookup, ownership, and status', async () => {
@@ -246,6 +268,33 @@ describe('boostLockService', () => {
     expect(expired.error?.code).toBe(ReasonCode.REWARD_EXPIRED);
     expect(used.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
     expect(notEntered.error?.code).toBe(ReasonCode.NOT_OPTED_IN);
+  });
+
+  it('re-reads the lock when the reward is already USED and applies the replay rule', async () => {
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({ status: 'USED' }));
+    const findLock = jest.spyOn(betBoostLockRepository, 'findByBetId')
+      // Lock committed by a concurrent request after the idempotency check.
+      .mockResolvedValueOnce(null).mockResolvedValueOnce(makeLock())
+      // The bet is locked under a different reward.
+      .mockResolvedValueOnce(null).mockResolvedValueOnce(makeLock({ rewardId: 'reward-other' }))
+      // No lock exists for this bet at all.
+      .mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    const create = jest.spyOn(betBoostLockRepository, 'create');
+
+    const replayed = await boostLockService.lockBoost(input);
+    expect(replayed.success).toBe(true);
+    expect(replayed.data?.lock_id).toBe('lock-1');
+
+    const otherReward = await boostLockService.lockBoost(input);
+    expect(otherReward.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
+
+    const noLock = await boostLockService.lockBoost(input);
+    expect(noLock.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
+
+    expect(findLock).toHaveBeenCalledTimes(6);
+    // The already-loaded reward is reused for the ownership check.
+    expect(userRewardRepository.findById).toHaveBeenCalledTimes(3);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('returns failures for missing ride state and profile/eligibility thresholds', async () => {
@@ -323,14 +372,35 @@ describe('boostLockService', () => {
     expect(profileSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('handles unique constraint collisions for bet_id and reward_id', async () => {
-    jest.spyOn(betBoostLockRepository, 'findByBetId')
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(makeLock())
-      .mockResolvedValueOnce(null);
+  it('passes one transaction scope to insert, conditional USED transition and audit', async () => {
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
     jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
     jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
+
+    const result = await boostLockService.lockBoost(input);
+    expect(result.success).toBe(true);
+
+    const createTx = jest.mocked(betBoostLockRepository.create).mock.calls[0][1];
+    expect(createTx).toBeDefined();
+    expect(userRewardRepository.updateStatus).toHaveBeenCalledWith('reward-1', 'USED', undefined, {
+      tx: createTx,
+      fromStatus: 'ENTERED',
+    });
+    expect(jest.mocked(auditLogRepository.append).mock.calls[0][1]).toBe(createTx);
+  });
+
+  it('applies the replay rule after unique-key races without touching reward status', async () => {
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+    setupCoreMocks();
+    jest.spyOn(betBoostLockRepository, 'findByBetId')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(makeLock())
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(makeLock({ rewardId: 'reward-other' }))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
     jest.spyOn(betBoostLockRepository, 'create')
       .mockRejectedValueOnce({
         code: 'SQLITE_CONSTRAINT',
@@ -338,17 +408,49 @@ describe('boostLockService', () => {
       })
       .mockRejectedValueOnce({
         code: '23505',
-        detail: 'duplicate key value violates unique constraint reward_id',
+        detail: 'duplicate key value violates unique constraint bet_id',
+      })
+      .mockRejectedValueOnce({
+        code: 'SQLITE_CONSTRAINT',
+        message: 'UNIQUE constraint failed: bet_boost_locks.reward_id',
       });
 
-    const duplicateBet = await boostLockService.lockBoost(input);
-    expect(duplicateBet.success).toBe(true);
-    expect(duplicateBet.data?.lock_id).toBe('lock-1');
+    const sameReward = await boostLockService.lockBoost(input);
+    expect(sameReward.success).toBe(true);
+    expect(sameReward.data?.lock_id).toBe('lock-1');
 
-    const duplicateReward = await boostLockService.lockBoost(input);
-    expect(duplicateReward.success).toBe(false);
-    expect(duplicateReward.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
-    expect(userRewardRepository.updateStatus).toHaveBeenCalledWith('reward-1', 'USED');
+    const otherReward = await boostLockService.lockBoost(input);
+    expect(otherReward.error?.code).toBe(ReasonCode.BET_ALREADY_LOCKED);
+
+    const rewardCollision = await boostLockService.lockBoost(input);
+    expect(rewardCollision.error?.code).toBe(ReasonCode.REWARD_ALREADY_USED);
+
+    // Status is only ever changed inside the lock transaction, never in the fallback.
+    expect(userRewardRepository.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('treats a lost ENTERED -> USED transition as a conflict and re-reads state', async () => {
+    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+    setupCoreMocks();
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    jest.spyOn(userRewardRepository, 'findById')
+      .mockResolvedValueOnce(makeReward())
+      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED' }));
+    jest.spyOn(userRewardRepository, 'updateStatus').mockResolvedValueOnce(null);
+
+    const result = await boostLockService.lockBoost(input);
+    expect(result.error?.code).toBe(ReasonCode.REWARD_EXPIRED);
+    expect(auditLogRepository.append).not.toHaveBeenCalled();
+  });
+
+  it('rethrows unexpected persistence errors', async () => {
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+    setupCoreMocks();
+    jest.spyOn(betBoostLockRepository, 'create').mockRejectedValueOnce(new Error('disk full'));
+
+    await expect(boostLockService.lockBoost(input)).rejects.toThrow('disk full');
   });
 
   it('returns lock record by bet id', async () => {

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { rewardProfileService } from '../services/rewardProfileService';
-import { createRewardProfileSchema, updateRewardProfileSchema } from '../validation/schemas';
+import { createRewardProfileSchema, updateRewardProfileSchema, idParamsSchema } from '../validation/schemas';
 import { toDTO } from '../types/rewardProfile';
 import { createApiError } from '../middleware/errorHandler';
 
@@ -54,7 +54,7 @@ export async function getProfile(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
 
     const result = await rewardProfileService.getProfileById(id);
 
@@ -112,7 +112,7 @@ export async function updateProfile(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
     const validated = updateRewardProfileSchema.parse(req.body);
 
     const result = await rewardProfileService.updateProfile(id, {
@@ -155,7 +155,7 @@ export async function deleteProfile(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { id } = req.params;
+    const { id } = idParamsSchema.parse(req.params);
 
     const result = await rewardProfileService.deleteProfile(id);
 

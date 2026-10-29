@@ -1,5 +1,5 @@
 import { rewardOptInService } from '../../src/services/rewardOptInService';
-import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
+import { userRewardRepository, BetAlreadyBoundError } from '../../src/db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
 import { rideDefinitionRepository } from '../../src/db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
@@ -89,8 +89,10 @@ function setupOptInDefaults(): void {
     ],
   });
   jest.spyOn(rideDefinitionRepository, 'createMany').mockResolvedValue([]);
-  jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValue(makeReward());
   jest.spyOn(userRewardRepository, 'updateStatus').mockResolvedValue(makeReward({ status: 'ENTERED' }));
+  jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValue(
+    makeReward({ status: 'ENTERED', betId: 'bet-1' })
+  );
   jest.spyOn(auditLogRepository, 'append').mockResolvedValue({
     id: 'audit-1',
     entityType: 'user_reward',
@@ -239,21 +241,39 @@ describe('rewardOptInService', () => {
       expect(minCombined.error?.code).toBe(ReasonCode.MIN_COMBINED_ODDS_NOT_MET);
     });
 
-    it('returns internal errors when persistence updates fail', async () => {
+    it('maps a lost GRANTED claim, a bound bet and a missing row to service errors', async () => {
       jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
       jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
       setupOptInDefaults();
 
-      jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValueOnce(null);
-      const missingRideStart = await rewardOptInService.optIn('reward-1', input);
-      expect(missingRideStart.error?.code).toBe(ReasonCode.INTERNAL_ERROR);
-      expect(missingRideStart.error?.message).toMatch(/update reward status/i);
-
-      jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValueOnce(makeReward());
+      // Concurrent opt-in already moved the reward out of GRANTED.
       jest.spyOn(userRewardRepository, 'updateStatus').mockResolvedValueOnce(null);
-      const missingEntered = await rewardOptInService.optIn('reward-1', input);
-      expect(missingEntered.error?.code).toBe(ReasonCode.INTERNAL_ERROR);
-      expect(missingEntered.error?.message).toMatch(/start ride/i);
+      const lostClaim = await rewardOptInService.optIn('reward-1', input);
+      expect(lostClaim.error?.code).toBe(ReasonCode.ALREADY_OPTED_IN);
+
+      // Bet already attached to another reward.
+      jest.spyOn(userRewardRepository, 'updateRideStart').mockRejectedValueOnce(new BetAlreadyBoundError('bet-1'));
+      const bound = await rewardOptInService.optIn('reward-1', input);
+      expect(bound.error?.code).toBe(ReasonCode.BET_ALREADY_BOUND);
+
+      jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValueOnce(null);
+      const missingRow = await rewardOptInService.optIn('reward-1', input);
+      expect(missingRow.error?.code).toBe(ReasonCode.INTERNAL_ERROR);
+      expect(missingRow.error?.message).toMatch(/start ride/i);
+
+      // None of the failed attempts wrote checkpoints or audit rows.
+      expect(rideDefinitionRepository.createMany).not.toHaveBeenCalled();
+      expect(auditLogRepository.append).not.toHaveBeenCalled();
+    });
+
+    it('rethrows unexpected persistence errors', async () => {
+      jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+      jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+      setupOptInDefaults();
+      jest.spyOn(rideDefinitionRepository, 'createMany').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(rewardOptInService.optIn('reward-1', input)).rejects.toThrow('disk full');
+      expect(auditLogRepository.append).not.toHaveBeenCalled();
     });
 
     it('starts ride and returns success payload', async () => {
@@ -268,6 +288,17 @@ describe('rewardOptInService', () => {
       expect(result.data?.reward.status).toBe('ENTERED');
       expect(rideDefinitionRepository.createMany).toHaveBeenCalledTimes(1);
       expect(auditLogRepository.append).toHaveBeenCalledTimes(1);
+
+      // Conditional claim and every write share one transaction scope.
+      const statusCall = jest.mocked(userRewardRepository.updateStatus).mock.calls[0];
+      expect(statusCall[0]).toBe('reward-1');
+      expect(statusCall[1]).toBe('ENTERED');
+      expect(statusCall[3]).toMatchObject({ fromStatus: 'GRANTED' });
+      const tx = statusCall[3]?.tx;
+      expect(tx).toBeDefined();
+      expect(jest.mocked(userRewardRepository.updateRideStart).mock.calls[0][5]).toBe(tx);
+      expect(jest.mocked(rideDefinitionRepository.createMany).mock.calls[0][1]).toBe(tx);
+      expect(jest.mocked(auditLogRepository.append).mock.calls[0][1]).toBe(tx);
     });
   });
 

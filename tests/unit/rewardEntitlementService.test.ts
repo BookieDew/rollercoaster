@@ -1,4 +1,6 @@
-import { rewardEntitlementService } from '../../src/services/rewardEntitlementService';
+import { rewardEntitlementService, createRideSeed } from '../../src/services/rewardEntitlementService';
+import { generateSeed, deriveRideDurationSeconds } from '../../src/computations/deterministicRideGenerator';
+import { config } from '../../src/config';
 import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
@@ -80,40 +82,52 @@ describe('rewardEntitlementService', () => {
       expect(result.error?.code).toBe(ReasonCode.PROFILE_INACTIVE);
     });
 
-    it('creates reward, updates seed/end time, and audits', async () => {
-      const initialReward = makeReward({ seed: 'pending' });
-      const updatedSeedReward = makeReward({ seed: 'seed-123' });
-      const finalReward = makeReward({
-        seed: 'seed-123',
-        endTime: new Date(Date.now() + 5000).toISOString(),
-      });
+    it('creates the reward with a random seed in one insert and audits it in the same scope', async () => {
+      const createdReward = makeReward({ seed: 'a'.repeat(64) });
 
       jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
-      const createSpy = jest.spyOn(userRewardRepository, 'create').mockResolvedValue(initialReward);
-      const seedSpy = jest.spyOn(userRewardRepository, 'updateSeed').mockResolvedValue(updatedSeedReward);
-      const endTimeSpy = jest.spyOn(userRewardRepository, 'updateEndTime').mockResolvedValue(finalReward);
+      const createSpy = jest.spyOn(userRewardRepository, 'create').mockResolvedValue(createdReward);
       const auditSpy = jest.spyOn(auditLogRepository, 'append').mockResolvedValue({
         id: 'audit-1',
         entityType: 'user_reward',
-        entityId: finalReward.id,
+        entityId: createdReward.id,
         action: 'GRANT',
         payload: {},
-        timestamp: finalReward.createdAt,
-        createdAt: finalReward.createdAt,
+        timestamp: createdReward.createdAt,
+        createdAt: createdReward.createdAt,
       });
 
       const result = await rewardEntitlementService.grantReward({
-        userId: initialReward.userId,
-        profileVersionId: initialReward.profileVersionId,
+        userId: createdReward.userId,
+        profileVersionId: createdReward.profileVersionId,
         durationSeconds: 999,
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.id).toBe(initialReward.id);
+      expect(result.data).toBe(createdReward);
       expect(createSpy).toHaveBeenCalledTimes(1);
-      expect(seedSpy).toHaveBeenCalledTimes(1);
-      expect(endTimeSpy).toHaveBeenCalledTimes(1);
       expect(auditSpy).toHaveBeenCalledTimes(1);
+
+      const [createInput, tx] = createSpy.mock.calls[0];
+      expect(tx).toBeDefined();
+      expect(auditSpy.mock.calls[0][1]).toBe(tx);
+      expect(createInput.seed).toMatch(/^[0-9a-f]{64}$/);
+      expect(createInput.seed).not.toBe(generateSeed(createdReward.id, createdReward.userId, createdReward.profileVersionId));
+      // Stored end time still follows the unchanged seed-derived duration.
+      const duration = deriveRideDurationSeconds(
+        createInput.seed,
+        config.ride.minDurationSeconds,
+        config.ride.maxDurationSeconds
+      );
+      const storedMs = Date.parse(createInput.endTime) - Date.parse(createInput.startTime);
+      expect(Math.abs(storedMs - duration * 1000)).toBeLessThan(1);
+      expect(auditSpy.mock.calls[0][0].payload).toMatchObject({ seed: createInput.seed, requestedDurationSeconds: 999 });
+    });
+
+    it('createRideSeed returns distinct 32-byte hex values', () => {
+      const seeds = new Set(Array.from({ length: 50 }, () => createRideSeed()));
+      expect(seeds.size).toBe(50);
+      for (const seed of seeds) expect(seed).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 

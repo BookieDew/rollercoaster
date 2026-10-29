@@ -17,8 +17,12 @@ app.use(express.json({
 // Request logging
 app.use(requestLogger);
 
-// Demo UI (local use)
-app.use('/demo', express.static(path.join(__dirname, '../public/demo')));
+// Demo UI (local use). Off by default in production; see DEMO_UI_ENABLED.
+// public/demo sits beside both src/ (ts-node, jest) and dist/ (compiled build).
+const demoDirectory = path.resolve(__dirname, '..', 'public', 'demo');
+if (config.server.demoUiEnabled) {
+  app.use('/demo', express.static(demoDirectory));
+}
 
 // Mount all routes
 app.use('/api', routes);
@@ -37,7 +41,8 @@ let server: ReturnType<typeof app.listen> | null = null;
 function startServer(port?: number): ReturnType<typeof app.listen> {
   const listenPort = port ?? config.server.port;
   server = app.listen(listenPort, () => {
-    console.log(`Server running on port ${listenPort} in ${config.server.env} mode`);
+    const demoState = config.server.demoUiEnabled ? 'enabled at /demo' : 'disabled';
+    console.log(`Server running on port ${listenPort} in ${config.server.env} mode (demo UI ${demoState})`);
   });
   return server;
 }

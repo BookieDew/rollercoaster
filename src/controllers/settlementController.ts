@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { settlementService } from '../services/settlementService';
-import { settlementRequestSchema } from '../validation/schemas';
+import { settlementRequestSchema, betIdParamsSchema } from '../validation/schemas';
 import { createApiError } from '../middleware/errorHandler';
+import { ReasonCode } from '../types/reasonCodes';
 
 /**
  * POST /settlement - Settle a bet outcome
@@ -42,7 +43,7 @@ export async function getSettlement(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { betId } = req.params;
+    const { betId } = betIdParamsSchema.parse(req.params);
 
     const result = await settlementService.getSettlementByBetId(betId);
 
@@ -54,11 +55,7 @@ export async function getSettlement(
     }
 
     if (!result.data) {
-      res.status(404).json({
-        error: 'Not Found',
-        message: `No settlement found for bet ${betId}`,
-      });
-      return;
+      throw createApiError(`No settlement found for bet ${betId}`, ReasonCode.SETTLEMENT_NOT_FOUND);
     }
 
     res.json(result.data);

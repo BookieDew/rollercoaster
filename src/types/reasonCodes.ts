@@ -14,12 +14,16 @@ export enum ReasonCode {
   RIDE_ENDED = 'RIDE_ENDED',
   RIDE_CRASHED = 'RIDE_CRASHED',
 
+  // Opt-in reason codes
+  BET_ALREADY_BOUND = 'BET_ALREADY_BOUND',
+
   // Lock reason codes
   BET_ALREADY_LOCKED = 'BET_ALREADY_LOCKED',
   LOCK_NOT_FOUND = 'LOCK_NOT_FOUND',
 
   // Settlement reason codes
   BET_ALREADY_SETTLED = 'BET_ALREADY_SETTLED',
+  SETTLEMENT_NOT_FOUND = 'SETTLEMENT_NOT_FOUND',
   INVALID_OUTCOME = 'INVALID_OUTCOME',
 
   // Profile reason codes
@@ -29,7 +33,15 @@ export enum ReasonCode {
 
   // General errors
   VALIDATION_ERROR = 'VALIDATION_ERROR',
+  ROUTE_NOT_FOUND = 'ROUTE_NOT_FOUND',
   INTERNAL_ERROR = 'INTERNAL_ERROR',
+}
+
+const REASON_CODE_VALUES: ReadonlySet<string> = new Set(Object.values(ReasonCode));
+
+/** True only for values of the ReasonCode enum (never driver codes such as SQLITE_* or 23505). */
+export function isReasonCode(value: unknown): value is ReasonCode {
+  return typeof value === 'string' && REASON_CODE_VALUES.has(value);
 }
 
 export type EligibilityReasonCode =

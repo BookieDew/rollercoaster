@@ -1,10 +1,11 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
+import { executorFor, type TransactionScope } from './transaction';
 import type { BetBoostLock, CreateBetBoostLockInput } from '../../types/betBoostLock';
 
 const TABLE = 'bet_boost_locks';
 
-export async function create(input: CreateBetBoostLockInput): Promise<BetBoostLock> {
+export async function create(input: CreateBetBoostLockInput, tx?: TransactionScope): Promise<BetBoostLock> {
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -21,7 +22,8 @@ export async function create(input: CreateBetBoostLockInput): Promise<BetBoostLo
     created_at: now,
   };
 
-  await db(TABLE).insert(record);
+  const q = await executorFor(tx);
+  await q(TABLE).insert(record);
   return mapToEntity(record);
 }
 

@@ -86,7 +86,8 @@ Curve aesthetics and final acceptance remain separate review items.
 ## Risk controls and safeguards
 - Bonus applies only to winnings; bettors never lose extra stake through this feature.
 - Single-use token behavior prevents repeat claiming of the same reward.
-- Lock and settlement are idempotent for safe sportsbook integration.
+- Lock and settlement are idempotent for safe sportsbook integration: an identical retry returns the original result, while a conflicting one (another reward or user for the same bet, or a different settlement outcome/amount) is rejected rather than silently accepted. One bet can start only one ride.
+- While a ride is live, players see no countdown, ride length or ride maximum; those are revealed only after the ride ends or the boost is locked. Ride seeds are random and never exposed.
 - Deterministic seeded ride generation supports full replay and dispute handling.
 - HMAC authentication is supported for monetary endpoints.
 

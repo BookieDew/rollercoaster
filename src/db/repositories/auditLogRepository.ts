@@ -1,5 +1,6 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
+import { executorFor, type TransactionScope } from './transaction';
 
 export interface AuditLogEntry {
   id: string;
@@ -20,7 +21,7 @@ export interface CreateAuditLogInput {
 
 const TABLE = 'audit_logs';
 
-export async function append(input: CreateAuditLogInput): Promise<AuditLogEntry> {
+export async function append(input: CreateAuditLogInput, tx?: TransactionScope): Promise<AuditLogEntry> {
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -34,7 +35,8 @@ export async function append(input: CreateAuditLogInput): Promise<AuditLogEntry>
     created_at: now,
   };
 
-  await db(TABLE).insert(record);
+  const q = await executorFor(tx);
+  await q(TABLE).insert(record);
   return mapToEntity(record);
 }
 

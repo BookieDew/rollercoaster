@@ -1,6 +1,7 @@
 import { userRewardRepository } from '../db/repositories/userRewardRepository';
 import { betBoostLockRepository } from '../db/repositories/betBoostLockRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
+import { runInTransaction, Rollback, isUniqueViolation } from '../db/repositories/transaction';
 import {
   filterQualifyingSelections,
   meetsMinSelectionCount,
@@ -19,6 +20,7 @@ import {
   calculateLinearBoostPctAtElapsed,
 } from '../computations';
 import type { BetBoostLock, LockResponse } from '../types/betBoostLock';
+import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import type { RidePathPoint } from '../types/ride';
 import { ReasonCode } from '../types/reasonCodes';
@@ -49,13 +51,10 @@ export async function lockBoost(
 ): Promise<ServiceResult<LockResponse>> {
   const { userId, rewardId, betId } = input;
 
-  // Check idempotency - if bet already locked, return existing lock
+  // Idempotency: an existing lock is replayed only to the same reward and its owner.
   const existingLock = await betBoostLockRepository.findByBetId(betId);
   if (existingLock) {
-    return {
-      success: true,
-      data: buildLockResponse(existingLock),
-    };
+    return replayExistingLock(existingLock, input);
   }
 
   // Fetch the reward
@@ -93,6 +92,12 @@ export async function lockBoost(
   }
 
   if (reward.status === 'USED') {
+    // A concurrent lock may have committed after the idempotency check above:
+    // re-read and apply the replay rule before reporting the reward as used.
+    const lockForBet = await betBoostLockRepository.findByBetId(betId);
+    if (lockForBet) {
+      return replayExistingLock(lockForBet, input, reward);
+    }
     return {
       success: false,
       error: {
@@ -343,128 +348,172 @@ export async function lockBoost(
     };
   }
 
-  // Create the lock record
-  let lock: BetBoostLock;
+  // Insert lock, consume reward (ENTERED -> USED) and audit atomically.
+  let lock: BetBoostLock | null;
   try {
-    lock = await betBoostLockRepository.create({
-      betId,
-      rewardId,
-      lockedBoostPct,
-      qualifyingSelections: qualifying.length,
-      qualifyingOdds: combinedOdds,
-      ticketStrength,
-      snapshot: {
-        selections: qualifying,
-        disqualifiedSelections: disqualified,
-        profileId: profile.id,
-        rideMode: profile.rideMode,
-        minSelections: profile.minSelections,
-        minCombinedOdds: profile.minCombinedOdds,
-        minSelectionOdds: profile.minSelectionOdds,
-        minBoostPct: profile.minBoostPct,
-        maxBoostPct: profile.maxBoostPct,
-        maxBoostMinSelections: profile.maxBoostMinSelections,
-        maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-        maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
-        maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
-        effectiveMinFloorRate: profile.effectiveMinFloorRate,
-        rideDurationSeconds,
-        checkpointCount,
-        volatility,
-        seed: reward.seed,
-        crashPct,
-        totalSelectionCount: storedSelections.length,
-        qualifyingSelectionCount: qualifying.length,
-        combinedOdds,
+    lock = await runInTransaction<BetBoostLock | null>(async (tx) => {
+      const created = await betBoostLockRepository.create({
+        betId,
+        rewardId,
+        lockedBoostPct,
+        qualifyingSelections: qualifying.length,
+        qualifyingOdds: combinedOdds,
         ticketStrength,
-        rideValue: rideValueForSnapshot,
-        maxRideValue: maxRideValueForSnapshot,
-        elapsedPct,
-        effectiveMinBoostPct,
-        maxEligibleBoostPct,
-        maxPossibleBoostPct,
-        maximumModel: rideMath.maximumModel,
-        mathSnapshotVersion: rideMath.version,
-        phaseDiagnostics: rideMath.phaseDiagnostics,
-        boostModel: {
-          selectionWeight: boostModel.selectionWeight,
-          oddsWeight: boostModel.oddsWeight,
-          maxEligibilityExponent: boostModel.maxEligibilityExponent,
-          effectiveMinFloorRate: boostModel.effectiveMinFloorRate,
-          selectionRatio: boostModel.selectionRatio,
-          oddsRatio: boostModel.oddsRatio,
-          eligibilityFactor: boostModel.eligibilityFactor,
+        snapshot: {
+          selections: qualifying,
+          disqualifiedSelections: disqualified,
+          profileId: profile.id,
+          rideMode: profile.rideMode,
+          minSelections: profile.minSelections,
+          minCombinedOdds: profile.minCombinedOdds,
+          minSelectionOdds: profile.minSelectionOdds,
+          minBoostPct: profile.minBoostPct,
+          maxBoostPct: profile.maxBoostPct,
+          maxBoostMinSelections: profile.maxBoostMinSelections,
+          maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+          maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+          maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+          effectiveMinFloorRate: profile.effectiveMinFloorRate,
+          rideDurationSeconds,
+          checkpointCount,
+          volatility,
+          seed: reward.seed,
+          crashPct,
+          totalSelectionCount: storedSelections.length,
+          qualifyingSelectionCount: qualifying.length,
+          combinedOdds,
+          ticketStrength,
+          rideValue: rideValueForSnapshot,
+          maxRideValue: maxRideValueForSnapshot,
+          elapsedPct,
+          effectiveMinBoostPct,
+          maxEligibleBoostPct,
+          maxPossibleBoostPct,
+          maximumModel: rideMath.maximumModel,
+          mathSnapshotVersion: rideMath.version,
+          phaseDiagnostics: rideMath.phaseDiagnostics,
+          boostModel: {
+            selectionWeight: boostModel.selectionWeight,
+            oddsWeight: boostModel.oddsWeight,
+            maxEligibilityExponent: boostModel.maxEligibilityExponent,
+            effectiveMinFloorRate: boostModel.effectiveMinFloorRate,
+            selectionRatio: boostModel.selectionRatio,
+            oddsRatio: boostModel.oddsRatio,
+            eligibilityFactor: boostModel.eligibilityFactor,
+          },
+          ridePath,
         },
-        ridePath,
-      },
+      }, tx);
+
+      const consumed = await userRewardRepository.updateStatus(rewardId, 'USED', undefined, {
+        tx,
+        fromStatus: 'ENTERED',
+      });
+      if (!consumed) {
+        throw new Rollback(null);
+      }
+
+      await auditLogRepository.append({
+        entityType: 'bet_boost_lock',
+        entityId: created.id,
+        action: 'LOCK',
+        payload: {
+          betId,
+          rewardId,
+          userId,
+          lockedBoostPct,
+          qualifyingSelections: qualifying.length,
+          combinedOdds,
+          ticketStrength,
+          elapsedPct,
+          maxRideValue: maxRideValueForSnapshot,
+          maxEligibleBoostPct,
+          maxPossibleBoostPct,
+          minBoostPct: profile.minBoostPct,
+          maxBoostPct: profile.maxBoostPct,
+          maxBoostMinSelections: profile.maxBoostMinSelections,
+          maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
+          maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
+          maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
+          effectiveMinFloorRate: profile.effectiveMinFloorRate,
+          minSelections: profile.minSelections,
+          minCombinedOdds: profile.minCombinedOdds,
+          minSelectionOdds: profile.minSelectionOdds,
+          checkpointCount,
+          volatility,
+          rideDurationSeconds,
+          rideMode: profile.rideMode,
+          seed: reward.seed,
+          crashPct,
+        },
+      }, tx);
+
+      return created;
     });
   } catch (error) {
-    // Concurrent duplicate lock on the same bet should behave idempotently.
-    if (isUniqueConstraintViolation(error, 'bet_id')) {
-      const existing = await betBoostLockRepository.findByBetId(betId);
-      if (existing) {
-        return {
-          success: true,
-          data: buildLockResponse(existing),
-        };
-      }
+    // A concurrent lock won the bet_id or reward_id unique key.
+    if (!isUniqueViolation(error)) {
+      throw error;
     }
-
-    if (isUniqueConstraintViolation(error, 'reward_id')) {
-      await userRewardRepository.updateStatus(rewardId, 'USED');
-      return {
-        success: false,
-        error: {
-          code: ReasonCode.REWARD_ALREADY_USED,
-          message: 'Reward has already been used',
-        },
-      };
-    }
-
-    throw error;
+    lock = null;
   }
 
-  // Mark reward as used
-  await userRewardRepository.updateStatus(rewardId, 'USED');
-
-  await auditLogRepository.append({
-    entityType: 'bet_boost_lock',
-    entityId: lock.id,
-    action: 'LOCK',
-    payload: {
-      betId,
-      rewardId,
-      userId,
-      lockedBoostPct,
-      qualifyingSelections: qualifying.length,
-      combinedOdds,
-      ticketStrength,
-      elapsedPct,
-      maxRideValue: maxRideValueForSnapshot,
-      maxEligibleBoostPct,
-      maxPossibleBoostPct,
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
-      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
-      effectiveMinFloorRate: profile.effectiveMinFloorRate,
-      minSelections: profile.minSelections,
-      minCombinedOdds: profile.minCombinedOdds,
-      minSelectionOdds: profile.minSelectionOdds,
-      checkpointCount,
-      volatility,
-      rideDurationSeconds,
-      rideMode: profile.rideMode,
-      seed: reward.seed,
-      crashPct,
-    },
-  });
+  if (!lock) {
+    return resolveLockConflict(input);
+  }
 
   return {
     success: true,
     data: buildLockResponse(lock),
+  };
+}
+
+/**
+ * Replays an existing lock only when it belongs to the requested reward and that
+ * reward belongs to the caller's user; any other bet/reward/user combination is a conflict.
+ */
+async function replayExistingLock(
+  existing: BetBoostLock,
+  input: LockInput,
+  loadedReward?: UserReward
+): Promise<ServiceResult<LockResponse>> {
+  if (existing.rewardId === input.rewardId) {
+    const reward = loadedReward ?? await userRewardRepository.findById(input.rewardId);
+    if (reward && reward.userId === input.userId) {
+      return { success: true, data: buildLockResponse(existing) };
+    }
+  }
+
+  return {
+    success: false,
+    error: {
+      code: ReasonCode.BET_ALREADY_LOCKED,
+      message: 'Bet is already locked for a different reward',
+    },
+  };
+}
+
+/** After a lost race (unique violation or reward no longer ENTERED), re-read and apply the replay rule. */
+async function resolveLockConflict(input: LockInput): Promise<ServiceResult<LockResponse>> {
+  const existing = await betBoostLockRepository.findByBetId(input.betId);
+  if (existing) {
+    return replayExistingLock(existing, input);
+  }
+
+  const reward = await userRewardRepository.findById(input.rewardId);
+  if (reward?.status === 'EXPIRED') {
+    return {
+      success: false,
+      error: { code: ReasonCode.REWARD_EXPIRED, message: 'Reward has expired' },
+    };
+  }
+
+  return {
+    success: false,
+    error: {
+      code: ReasonCode.REWARD_ALREADY_USED,
+      message: 'Reward has already been used',
+    },
   };
 }
 
@@ -529,31 +578,6 @@ function toBoostModelResponse(model: {
 function roundToDecimals(value: number, decimals: number): number {
   const factor = Math.pow(10, decimals);
   return Math.round(value * factor) / factor;
-}
-
-function isUniqueConstraintViolation(
-  error: unknown,
-  column: 'bet_id' | 'reward_id'
-): boolean {
-  const candidate = error as {
-    code?: string;
-    message?: string;
-    detail?: string;
-    constraint?: string;
-  };
-
-  const context = `${candidate.message ?? ''} ${candidate.detail ?? ''} ${candidate.constraint ?? ''}`
-    .toLowerCase();
-
-  if (candidate.code === 'SQLITE_CONSTRAINT' || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    return context.includes(`bet_boost_locks.${column}`) || context.includes(column);
-  }
-
-  if (candidate.code === '23505') {
-    return context.includes(column);
-  }
-
-  return false;
 }
 
 export const boostLockService = {

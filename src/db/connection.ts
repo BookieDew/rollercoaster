@@ -1,14 +1,21 @@
 import Knex from 'knex';
-import knexConfig from '../../knexfile';
-import { config } from '../config';
+import { buildKnexConfig, config } from '../config';
 
-const environment = config.server.env;
-const connectionConfig = knexConfig[environment];
+const knexConfig = buildKnexConfig(config);
 
-if (!connectionConfig) {
-  throw new Error(`No Knex configuration found for environment: ${environment}`);
+// PostgreSQL is selected by DATABASE_URL but its driver is not a dependency yet.
+if (knexConfig.client === 'pg') {
+  try {
+    require.resolve('pg');
+  } catch {
+    throw new Error(
+      'DATABASE_URL selects PostgreSQL, but the "pg" driver is not installed. '
+      + 'PostgreSQL support is not verified for this service yet; install the driver '
+      + '(npm install pg) or use a sqlite:// DATABASE_URL.'
+    );
+  }
 }
 
-const db = Knex(connectionConfig);
+const db = Knex(knexConfig);
 
 export default db;

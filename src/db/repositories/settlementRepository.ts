@@ -1,10 +1,11 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
+import { executorFor, type TransactionScope } from './transaction';
 import type { SettlementRecord, SettlementOutcome, CreateSettlementInput } from '../../types/settlement';
 
 const TABLE = 'settlement_records';
 
-export async function create(input: CreateSettlementInput): Promise<SettlementRecord> {
+export async function create(input: CreateSettlementInput, tx?: TransactionScope): Promise<SettlementRecord> {
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -18,7 +19,8 @@ export async function create(input: CreateSettlementInput): Promise<SettlementRe
     created_at: now,
   };
 
-  await db(TABLE).insert(record);
+  const q = await executorFor(tx);
+  await q(TABLE).insert(record);
   return mapToEntity(record);
 }
 

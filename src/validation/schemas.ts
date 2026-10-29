@@ -2,13 +2,36 @@ import { z } from 'zod';
 
 const selectionTypeSchema = z.enum(['STANDARD', 'SGP_COMPOSITE', 'SGP_LEG']);
 
+/** Upper bounds for caller-supplied identifiers and ticket data. */
+export const MAX_IDENTIFIER_LENGTH = 255;
+export const MAX_SELECTION_ODDS = 10_000;
+export const MAX_SELECTIONS = 100;
+/** Interim bound on settlement winnings until server-side total return lands. */
+export const MAX_WINNINGS = 1_000_000_000;
+
+const identifierSchema = z.string().min(1).max(MAX_IDENTIFIER_LENGTH);
+const selectionTextSchema = z.string().max(MAX_IDENTIFIER_LENGTH);
+
+// Path parameter schemas
+export const idParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export const userIdParamsSchema = z.object({
+  userId: identifierSchema,
+});
+
+export const betIdParamsSchema = z.object({
+  betId: identifierSchema,
+});
+
 // Selection schema
 export const selectionSchema = z.object({
-  id: z.string().min(1),
-  odds: z.number().positive(),
-  name: z.string().optional(),
-  market: z.string().optional(),
-  event: z.string().optional(),
+  id: identifierSchema,
+  odds: z.number().positive().max(MAX_SELECTION_ODDS),
+  name: selectionTextSchema.optional(),
+  market: selectionTextSchema.optional(),
+  event: selectionTextSchema.optional(),
   selection_type: selectionTypeSchema.optional(),
   sgp_group_id: z.string().min(1).max(100).optional(),
   eligible: z.boolean().optional(),
@@ -34,7 +57,7 @@ export const selectionSchema = z.object({
 
 // Ticket schema
 export const ticketSchema = z.object({
-  selections: z.array(selectionSchema).min(1),
+  selections: z.array(selectionSchema).min(1).max(MAX_SELECTIONS),
   stake: z.number().positive().optional(),
 });
 
@@ -109,43 +132,43 @@ export const updateRewardProfileSchema = z.object({
 
 // User Reward schemas
 export const grantRewardSchema = z.object({
-  user_id: z.string().min(1),
+  user_id: identifierSchema,
   profile_version_id: z.string().uuid(),
   duration_seconds: z.number().int().positive().optional(),
 });
 
 // Eligibility precheck schema (bet not started yet)
 export const eligibilityRequestSchema = z.object({
-  user_id: z.string().min(1),
+  user_id: identifierSchema,
   ticket: ticketSchema,
 });
 
 // Quote schema
 export const quoteRequestSchema = z.object({
-  user_id: z.string().min(1),
+  user_id: identifierSchema,
   reward_id: z.string().uuid(),
-  bet_id: z.string().min(1),
+  bet_id: identifierSchema,
 });
 
 // Lock schema
 export const lockRequestSchema = z.object({
-  user_id: z.string().min(1),
+  user_id: identifierSchema,
   reward_id: z.string().uuid(),
-  bet_id: z.string().min(1),
+  bet_id: identifierSchema,
 });
 
 // Start ride schema (bet already placed)
 export const startRideSchema = z.object({
-  user_id: z.string().min(1),
-  bet_id: z.string().min(1),
+  user_id: identifierSchema,
+  bet_id: identifierSchema,
   ticket: ticketSchema,
 });
 
 // Settlement schema
 export const settlementRequestSchema = z.object({
-  bet_id: z.string().min(1),
+  bet_id: identifierSchema,
   outcome: z.enum(['WIN', 'LOSS', 'VOID', 'CASHOUT']),
-  winnings: z.number().min(0),
+  winnings: z.number().finite().min(0).max(MAX_WINNINGS),
 });
 
 // Simulation schema

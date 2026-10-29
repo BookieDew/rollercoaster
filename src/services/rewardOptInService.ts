@@ -1,7 +1,8 @@
-import { userRewardRepository } from '../db/repositories/userRewardRepository';
+import { userRewardRepository, BetAlreadyBoundError } from '../db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
 import { rideDefinitionRepository } from '../db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
+import { runInTransaction, Rollback } from '../db/repositories/transaction';
 import {
   deriveRideParams,
   deriveRideDurationSeconds,
@@ -282,7 +283,7 @@ export async function optIn(
   const startTime = now.toISOString();
   const endTime = new Date(now.getTime() + durationSeconds * 1000).toISOString();
 
-  // Persist ride checkpoints
+  // Ride checkpoints to persist (legacy table copy; V3 JSON in the snapshot is authoritative)
   const checkpointInputs = ride.checkpoints.map((cp) => ({
     rewardId,
     checkpointIndex: cp.index,
@@ -290,81 +291,83 @@ export async function optIn(
     baseBoostValue: cp.baseBoostValue,
   }));
 
-  await rideDefinitionRepository.createMany(checkpointInputs);
-
-  // Update reward status to ENTERED and bind bet/ticket
   const optedInAt = now.toISOString();
-  const updatedReward = await userRewardRepository.updateRideStart(
-    rewardId,
-    startTime,
-    endTime,
-    betId,
-    {
-      rideMath: createRideMathSnapshot(profile, startTime, endTime, derived, 3, ride),
-      selections,
-      qualifyingSelections: qualifying,
-      disqualifiedSelections: disqualified,
-      combinedOdds,
-      ticketStrength,
-      minSelectionOdds: profile.minSelectionOdds,
-      minSelections: profile.minSelections,
-      minCombinedOdds: profile.minCombinedOdds,
-    }
-  );
-
-  let enteredReward: UserReward | null = null;
-  if (updatedReward) {
-    enteredReward = await userRewardRepository.updateStatus(rewardId, 'ENTERED', optedInAt);
-  }
-
-  if (!updatedReward) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.INTERNAL_ERROR,
-        message: 'Failed to update reward status',
-      },
-    };
-  }
-
-  await auditLogRepository.append({
-    entityType: 'user_reward',
-    entityId: rewardId,
-    action: 'OPT_IN',
-    payload: {
-      userId,
-      betId,
-      optedInAt,
-      checkpointCount: ride.checkpoints.length,
-      volatility: derived.volatility,
-      rideMode: profile.rideMode,
-      crashPct: derived.crashPct,
-      seed,
-      durationSeconds,
-      combinedOdds,
-      ticketStrength,
-      mathSnapshotVersion: 3,
-      phaseDiagnostics: ride.phaseDiagnostics,
-    },
-  });
-
-  if (!enteredReward) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.INTERNAL_ERROR,
-        message: 'Failed to start ride',
-      },
-    };
-  }
-
-  return {
-    success: true,
-    data: {
-      reward: enteredReward,
-      rideStarted: true,
-    },
+  const ticketSnapshot = {
+    rideMath: createRideMathSnapshot(profile, startTime, endTime, derived, 3, ride),
+    selections,
+    qualifyingSelections: qualifying,
+    disqualifiedSelections: disqualified,
+    combinedOdds,
+    ticketStrength,
+    minSelectionOdds: profile.minSelectionOdds,
+    minSelections: profile.minSelections,
+    minCombinedOdds: profile.minCombinedOdds,
   };
+
+  try {
+    // Claim (GRANTED -> ENTERED), bet binding, checkpoints and audit are atomic.
+    return await runInTransaction<ServiceResult<OptInResult>>(async (tx) => {
+      const claimed = await userRewardRepository.updateStatus(rewardId, 'ENTERED', optedInAt, {
+        tx,
+        fromStatus: 'GRANTED',
+      });
+      if (!claimed) {
+        throw new Rollback(failure(ReasonCode.ALREADY_OPTED_IN, 'User has already opted into this reward'));
+      }
+
+      const enteredReward = await userRewardRepository.updateRideStart(
+        rewardId,
+        startTime,
+        endTime,
+        betId,
+        ticketSnapshot,
+        tx
+      );
+      if (!enteredReward) {
+        throw new Rollback(failure(ReasonCode.INTERNAL_ERROR, 'Failed to start ride'));
+      }
+
+      await rideDefinitionRepository.createMany(checkpointInputs, tx);
+
+      await auditLogRepository.append({
+        entityType: 'user_reward',
+        entityId: rewardId,
+        action: 'OPT_IN',
+        payload: {
+          userId,
+          betId,
+          optedInAt,
+          checkpointCount: ride.checkpoints.length,
+          volatility: derived.volatility,
+          rideMode: profile.rideMode,
+          crashPct: derived.crashPct,
+          seed,
+          durationSeconds,
+          combinedOdds,
+          ticketStrength,
+          mathSnapshotVersion: 3,
+          phaseDiagnostics: ride.phaseDiagnostics,
+        },
+      }, tx);
+
+      return {
+        success: true,
+        data: {
+          reward: enteredReward,
+          rideStarted: true,
+        },
+      };
+    });
+  } catch (error) {
+    if (error instanceof BetAlreadyBoundError) {
+      return failure(ReasonCode.BET_ALREADY_BOUND, 'Bet is already bound to a different reward');
+    }
+    throw error;
+  }
+}
+
+function failure<T>(code: ReasonCode, message: string): ServiceResult<T> {
+  return { success: false, error: { code, message } };
 }
 
 /**

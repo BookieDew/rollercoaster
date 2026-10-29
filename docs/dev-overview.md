@@ -22,7 +22,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 8) On loss, bonus = 0; crash/end prevents a new lock but cannot alter an existing lock
 
 ## Key behaviors
-- Ride is deterministic per reward: `generateSeed` hashes reward/user/profile IDs; saved seed, inputs, and checkpoints support replay.
+- Ride is deterministic per reward: the seed is 32 random bytes (hex) generated at grant and stored; saved seed, inputs, and checkpoints support replay. It is not derivable from public IDs and is never returned by the API. (`generateSeed` remains in the generator but is no longer used for rewards.)
 - Ride duration is short and random: `2-15s` (internal config).
 - Default minimum crash setting is `2s`. The existing rounded crash fraction can produce a slightly earlier boundary for exact-minimum/short durations (for example, `2 * 0.9999 = 1.9998s`); this edge is characterized, not repaired.
 - Crash timing uses weighted time buckets, renormalized when the configured minimum makes a bucket infeasible:
@@ -30,7 +30,9 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
   - MID: `65%`
   - LATE: `25%`
 - New v3 WAVES uses a domain-separated phase draw with UP/PEAK/DOWN targets 50/20/30 only for feasible repaired rides. Early/timing-constrained, flat/rounding-degenerate, and no-crash rides keep their baseline trajectory and separate diagnostic status. Historical generator phase labels describe checkpoint shaping, not guaranteed effective near-crash direction.
-- Active boost quotes return no countdown or future path/schedule. Existing reward/opt-in DTOs still contain start/end timestamps; these contracts have not been removed.
+- Active boost quotes return no countdown or future path/schedule, and withhold `theoretical_max_boost_pct` (null) while the ride is live; terminal quotes and locks keep it. Reward/opt-in responses return `end_time: null` until the reward is `USED` or `EXPIRED`.
+- Grant, opt-in, lock and settlement each write atomically (`runInTransaction` in `src/db/repositories/transaction.ts`; the transaction starts lazily on the first scoped query). Opt-in claims `GRANTED` → `ENTERED` and lock `ENTERED` → `USED` with conditional updates.
+- One bet binds to one reward (409 `BET_ALREADY_BOUND`, enforced in the opt-in transaction until a brand-scoped unique index lands); lock replay requires the same reward and owner (else 409 `BET_ALREADY_LOCKED`); a conflicting settlement replay is 409 `BET_ALREADY_SETTLED`.
 - Ticket strength weighting is `75%` qualifying selection count and `25%` combined odds.
 - Effective minimum boost can rise with ticket quality when max-access targets are configured (`effective_min_floor_rate`, default `0.35`). The profile max-access weights are separate from ticket-strength weights.
 - Generation uses a two-second minimum peak-delay shaping parameter where feasible; this is not a guarantee that the final clamped payout has no earlier plateau.

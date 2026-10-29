@@ -4,6 +4,8 @@ import rewardsRouter from './rewards';
 import boostRouter from './boost';
 import settlementRouter from './settlement';
 import simulationRouter from './simulation';
+import { createApiError } from '../middleware/errorHandler';
+import { ReasonCode } from '../types/reasonCodes';
 
 const router = Router();
 
@@ -13,5 +15,10 @@ router.use('/rewards', rewardsRouter);
 router.use('/boost', boostRouter);
 router.use('/settlement', settlementRouter);
 router.use('/simulation', simulationRouter);
+
+// Anything else under /api is a JSON 404 (must stay last).
+router.use((_req, _res, next) => {
+  next(createApiError('Route not found', ReasonCode.ROUTE_NOT_FOUND));
+});
 
 export default router;

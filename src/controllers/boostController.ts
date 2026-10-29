@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { boostQuoteService } from '../services/boostQuoteService';
 import { boostLockService } from '../services/boostLockService';
-import { quoteRequestSchema, lockRequestSchema } from '../validation/schemas';
+import { quoteRequestSchema, lockRequestSchema, betIdParamsSchema } from '../validation/schemas';
 import { createApiError } from '../middleware/errorHandler';
+import { ReasonCode } from '../types/reasonCodes';
 
 /**
  * POST /boost/quote - Get a boost quote for a prospective ticket
@@ -15,7 +16,7 @@ export async function getQuote(
   try {
     const validated = quoteRequestSchema.parse(req.body);
 
-    const result = await boostQuoteService.getQuote({
+    const result = await boostQuoteService.getPublicQuote({
       userId: validated.user_id,
       rewardId: validated.reward_id,
       betId: validated.bet_id,
@@ -75,7 +76,7 @@ export async function getLock(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { betId } = req.params;
+    const { betId } = betIdParamsSchema.parse(req.params);
 
     const result = await boostLockService.getLockByBetId(betId);
 
@@ -87,11 +88,7 @@ export async function getLock(
     }
 
     if (!result.data) {
-      res.status(404).json({
-        error: 'Not Found',
-        message: `No lock found for bet ${betId}`,
-      });
-      return;
+      throw createApiError(`No lock found for bet ${betId}`, ReasonCode.LOCK_NOT_FOUND);
     }
 
     res.json({

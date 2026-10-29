@@ -3,15 +3,26 @@
   "version": "1.0.0",
   "description": "REST API service for time-based rollercoaster loyalty reward with dynamic boost percentages",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=24.13.0 <25"
+  },
+  "files": [
+    "dist/",
+    "public/demo/",
+    "scripts/migrate-prod.js"
+  ],
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-migrations.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "jest --testPathPattern=tests/unit",
     "test:integration": "jest --testPathPattern=tests/integration",
     "test:all": "jest",
     "test:coverage": "jest --coverage",
     "migrate": "knex migrate:latest",
+    "migrate:prod": "node scripts/migrate-prod.js",
     "migrate:rollback": "knex migrate:rollback",
     "seed": "knex seed:run"
   },

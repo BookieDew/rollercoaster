@@ -1,10 +1,28 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import type { UserReward, UserRewardStatus, CreateUserRewardInput } from '../../types/userReward';
+import { executorFor, type TransactionScope } from './transaction';
 
 const TABLE = 'user_rewards';
 
-export async function create(input: CreateUserRewardInput): Promise<UserReward> {
+/**
+ * Raised when a bet is bound to a reward while another reward already holds it.
+ * Interim guard until brand-scoped bet uniqueness becomes a database constraint.
+ */
+export class BetAlreadyBoundError extends Error {
+  constructor(readonly betId: string) {
+    super('Bet is already bound to a different reward');
+    this.name = 'BetAlreadyBoundError';
+  }
+}
+
+export interface StatusUpdateOptions {
+  tx?: TransactionScope;
+  /** Only update when the row is currently in this status (compare-and-set). */
+  fromStatus?: UserRewardStatus;
+}
+
+export async function create(input: CreateUserRewardInput, tx?: TransactionScope): Promise<UserReward> {
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -23,12 +41,14 @@ export async function create(input: CreateUserRewardInput): Promise<UserReward> 
     updated_at: now,
   };
 
-  await db(TABLE).insert(record);
+  const q = await executorFor(tx);
+  await q(TABLE).insert(record);
   return mapToEntity(record);
 }
 
-export async function findById(id: string): Promise<UserReward | null> {
-  const record = await db(TABLE).where({ id }).first();
+export async function findById(id: string, tx?: TransactionScope): Promise<UserReward | null> {
+  const q = await executorFor(tx);
+  const record = await q(TABLE).where({ id }).first();
   return record ? mapToEntity(record) : null;
 }
 
@@ -51,7 +71,16 @@ export async function findActiveByUserId(userId: string): Promise<UserReward | n
   return record ? mapToEntity(record) : null;
 }
 
-export async function updateStatus(id: string, status: UserRewardStatus, optedInAt?: string): Promise<UserReward | null> {
+/**
+ * Sets the status. With `fromStatus` the update is conditional
+ * (`WHERE id = ? AND status = ?`); returns null when no row was updated.
+ */
+export async function updateStatus(
+  id: string,
+  status: UserRewardStatus,
+  optedInAt?: string,
+  options: StatusUpdateOptions = {}
+): Promise<UserReward | null> {
   const updates: Record<string, unknown> = {
     status,
     updated_at: new Date().toISOString(),
@@ -61,17 +90,37 @@ export async function updateStatus(id: string, status: UserRewardStatus, optedIn
     updates.opted_in_at = optedInAt;
   }
 
-  await db(TABLE).where({ id }).update(updates);
-  return findById(id);
+  const q = await executorFor(options.tx);
+  const query = q(TABLE).where({ id });
+  if (options.fromStatus) {
+    query.andWhere({ status: options.fromStatus });
+  }
+  const updated = await query.update(updates);
+  if (!updated) return null;
+  return findById(id, options.tx);
 }
 
+/**
+ * Binds the bet and frozen ride timing to the reward. Throws BetAlreadyBoundError
+ * when the bet is already attached to a different reward (any status).
+ */
 export async function updateRideStart(
   id: string,
   startTime: string,
   endTime: string,
   betId: string,
-  ticketSnapshot: Record<string, unknown>
+  ticketSnapshot: Record<string, unknown>,
+  tx?: TransactionScope
 ): Promise<UserReward | null> {
+  const q = await executorFor(tx);
+  const boundElsewhere = await q(TABLE)
+    .where({ bet_id: betId })
+    .whereNot({ id })
+    .first('id');
+  if (boundElsewhere) {
+    throw new BetAlreadyBoundError(betId);
+  }
+
   const updates: Record<string, unknown> = {
     start_time: startTime,
     end_time: endTime,
@@ -80,28 +129,8 @@ export async function updateRideStart(
     updated_at: new Date().toISOString(),
   };
 
-  await db(TABLE).where({ id }).update(updates);
-  return findById(id);
-}
-
-export async function updateSeed(id: string, seed: string): Promise<UserReward | null> {
-  const updates: Record<string, unknown> = {
-    seed,
-    updated_at: new Date().toISOString(),
-  };
-
-  await db(TABLE).where({ id }).update(updates);
-  return findById(id);
-}
-
-export async function updateEndTime(id: string, endTime: string): Promise<UserReward | null> {
-  const updates: Record<string, unknown> = {
-    end_time: endTime,
-    updated_at: new Date().toISOString(),
-  };
-
-  await db(TABLE).where({ id }).update(updates);
-  return findById(id);
+  await q(TABLE).where({ id }).update(updates);
+  return findById(id, tx);
 }
 
 export async function markExpired(): Promise<number> {
@@ -142,8 +171,6 @@ export const userRewardRepository = {
   findByUserId,
   findActiveByUserId,
   updateStatus,
-  updateSeed,
-  updateEndTime,
   updateRideStart,
   markExpired,
 };

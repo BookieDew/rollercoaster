@@ -1,6 +1,9 @@
 import request from 'supertest';
 import { app } from '../../src/index';
 import db from '../../src/db/connection';
+import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
+import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
+import { ReasonCode } from '../../src/types/reasonCodes';
 
 describe('Idempotency Integration Tests', () => {
   const API_KEY = 'test-api-key';
@@ -140,6 +143,80 @@ describe('Idempotency Integration Tests', () => {
       // Check database has only one lock
       const locks = await db('bet_boost_locks').where({ bet_id: 'idempotent-bet-2' });
       expect(locks).toHaveLength(1);
+    });
+  });
+
+  describe('Lock race: lock committed between the idempotency check and the reward read', () => {
+    const selections = [
+      { id: 's1', odds: 1.5 },
+      { id: 's2', odds: 2.0 },
+      { id: 's3', odds: 1.8 },
+    ];
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    async function enterRide(betId: string): Promise<void> {
+      const optInRes = await request(app)
+        .post(`/api/rewards/${rewardId}/opt-in`)
+        .set('X-API-Key', API_KEY)
+        .send({ user_id: 'idempotent-user', bet_id: betId, ticket: { selections } });
+      expect(optInRes.status).toBe(200);
+
+      // Pin evaluation inside the pre-crash window so the race, not ride timing, decides the outcome.
+      const row = await db('user_rewards').where({ id: rewardId }).first();
+      const math = JSON.parse(row.ticket_snapshot).rideMath;
+      const liveMs = Date.parse(math.startTime)
+        + Math.floor(math.rideDurationSeconds * math.crashPct * 1000 * 0.4);
+      jest.spyOn(Date, 'now').mockReturnValue(liveMs);
+    }
+
+    /**
+     * Forces the interleaving: the next lock request reads "no lock for this bet",
+     * then a competing request locks and commits (reward becomes USED), and only
+     * then does the first request read the reward.
+     */
+    function interleaveCompetingLockAfterIdempotencyCheck(competing: () => Promise<request.Response>) {
+      const competingResponse: { value?: request.Response } = {};
+      const realFindByBetId = betBoostLockRepository.findByBetId.bind(betBoostLockRepository);
+      jest.spyOn(betBoostLockRepository, 'findByBetId').mockImplementationOnce(async (betId: string) => {
+        const before = await realFindByBetId(betId);
+        competingResponse.value = await competing();
+        return before;
+      });
+      return competingResponse;
+    }
+
+    it('replays the committed lock (201) to the same reward and owner instead of REWARD_ALREADY_USED', async () => {
+      await enterRide('race-bet');
+      const payload = { user_id: 'idempotent-user', reward_id: rewardId, bet_id: 'race-bet' };
+      const lockRequest = () => request(app).post('/api/boost/lock').set('X-API-Key', API_KEY).send(payload);
+
+      const competing = interleaveCompetingLockAfterIdempotencyCheck(lockRequest);
+      const findReward = jest.spyOn(userRewardRepository, 'findById');
+      const late = await lockRequest();
+
+      expect(competing.value?.status).toBe(201);
+      // The late request saw no lock, then read the reward only after it became USED.
+      expect(findReward).toHaveBeenCalled();
+      expect(late.status).toBe(201);
+      expect(late.body.lock_id).toBe(competing.value!.body.lock_id);
+      expect(late.body).toEqual(competing.value!.body);
+      expect(await db('bet_boost_locks').where({ bet_id: 'race-bet' })).toHaveLength(1);
+      expect((await db('user_rewards').where({ id: rewardId }).first()).status).toBe('USED');
+    });
+
+    it('still answers REWARD_ALREADY_USED when the used reward has no lock for this bet', async () => {
+      await enterRide('used-bet');
+      await db('user_rewards').where({ id: rewardId }).update({ status: 'USED' });
+
+      const res = await request(app)
+        .post('/api/boost/lock')
+        .set('X-API-Key', API_KEY)
+        .send({ user_id: 'idempotent-user', reward_id: rewardId, bet_id: 'used-bet' });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe(ReasonCode.REWARD_ALREADY_USED);
     });
   });
 
