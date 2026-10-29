@@ -40,7 +40,7 @@ async (page) => {
     assert(!layout.clipped.length, `Clipped inputs at${width}: ${layout.clipped}`);
     assert(layout.legs[1].top > layout.legs[0].top && layout.legs[1].left === layout.legs[0].left, 'SGP legs are not vertical');
     await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({ path: `output/playwright/mobile-${width}-editor.png`, fullPage: true });
+    await page.screenshot({ path: `output/playwright/two-block/mobile-${width}-editor.png`, fullPage: true });
     result.push({ width, documentWidth: layout.document, clipped: layout.clipped.length, verticalLegs: layout.legs.length });
   }
   await page.getByRole('textbox', { name: 'Key', exact: true }).fill('demo-ui-test-key');
@@ -55,11 +55,11 @@ async (page) => {
   await page.getByRole('button', { name: 'Start Ride (Opt-in)', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#rideSamples circle').length >= 3);
   await page.locator('.chart-panel').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: 'output/playwright/mobile-390-live.png', fullPage: false });
+  await page.screenshot({ path: 'output/playwright/two-block/mobile-390-live.png', fullPage: false });
   await page.getByRole('button', { name: 'Stop Ride (Lock)', exact: true }).click();
   await page.waitForFunction(() => document.getElementById('rideOutcomeBox').style.display === 'block');
   await page.locator('.chart-panel').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: 'output/playwright/mobile-390-final.png', fullPage: false });
+  await page.screenshot({ path: 'output/playwright/two-block/mobile-390-final.png', fullPage: false });
   const final = await page.locator('#responseBox').textContent();
   assert(JSON.parse(final).lock_id, 'Mobile did not lock in time');
   return { layout: result, qualifyingCount: 5, finalBoost: JSON.parse(final).locked_boost_pct };
