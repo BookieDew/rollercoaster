@@ -2,6 +2,7 @@ import request from 'supertest';
 import { app } from '../../src/index';
 import db from '../../src/db/connection';
 import { ReasonCode } from '../../src/types/reasonCodes';
+import { liveMomentMs } from '../helpers/v4Rides';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
 import { settlementRepository } from '../../src/db/repositories/settlementRepository';
 
@@ -63,9 +64,7 @@ function optIn(rewardId: string, userId: string, betId: string, selections: Sele
 /** Freezes the evaluation clock inside the pre-crash window of a reward's ride. */
 async function freezeClockAtLivePoint(rewardId: string): Promise<void> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  const math = JSON.parse(row.ticket_snapshot).rideMath;
-  const liveMs = Date.parse(math.startTime) + Math.floor(math.rideDurationSeconds * math.crashPct * 1000 * 0.4);
-  jest.spyOn(Date, 'now').mockReturnValue(liveMs);
+  jest.spyOn(Date, 'now').mockReturnValue(liveMomentMs(JSON.parse(row.ticket_snapshot).rideMath));
 }
 
 interface LockedBet {

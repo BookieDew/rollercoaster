@@ -1,10 +1,9 @@
 import { userRewardRepository } from '../db/repositories/userRewardRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import { runInTransaction } from '../db/repositories/transaction';
-import { calculateElapsedPct, hasRideEnded } from '../computations';
 import type { UserReward } from '../types/userReward';
 import { LEGACY_BRAND_ID } from '../types/brand';
-import { resolveRideMathSnapshot } from './rideMathSnapshot';
+import { resolveRideMath, rideClock } from './rideMathSnapshot';
 import { config } from '../config';
 
 export type ExpiryTrigger = 'OPT_IN' | 'JOB';
@@ -72,14 +71,13 @@ async function expireGrantedPastValidity(now: Date): Promise<number> {
 
 /** True once an ENTERED ride can no longer be locked: its end time or crash has passed. */
 async function isRideOver(reward: UserReward, now: Date): Promise<boolean> {
-  const rideMath = await resolveRideMathSnapshot(reward);
-  if (!rideMath) {
-    // Without saved ride math fall back to the reward's own end time.
+  const resolved = resolveRideMath(reward);
+  if (!resolved) {
+    // Without a valid V4 ride (retired V1-V3 math or a damaged snapshot) fall back to the reward's own end time.
     return new Date(reward.endTime).getTime() <= now.getTime();
   }
-  const elapsedPct = calculateElapsedPct(rideMath.startTime, rideMath.endTime, now);
-  const crashed = elapsedPct >= rideMath.crashPct && rideMath.crashPct < 1;
-  return crashed || hasRideEnded(rideMath.startTime, rideMath.endTime, now);
+  const clock = rideClock(resolved.math, now.getTime());
+  return clock.crashed || clock.ended;
 }
 
 /**

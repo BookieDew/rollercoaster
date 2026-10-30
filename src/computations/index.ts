@@ -5,7 +5,7 @@ export {
 } from './qualifyingSelectionFilter';
 
 export {
-  calculateCombinedOdds,
+  calculateCombinedOddsExact,
   meetsCombinedOddsThreshold,
   roundOdds,
 } from './combinedOddsCalculator';
@@ -15,20 +15,6 @@ export {
   computeLinearStrength,
   type TicketStrengthConfig,
 } from './ticketStrengthScorer';
-
-export {
-  generateSeed,
-  deriveRideParams,
-  deriveCrashPct,
-  deriveRideDurationSeconds,
-  generateRide,
-  interpolateRideValue,
-  calculateElapsedPct,
-  hasRideEnded,
-  type RideCheckpoint,
-  type RideConfig,
-  type GeneratedRide,
-} from './deterministicRideGenerator';
 
 export {
   calculateFinalBoost,
@@ -43,15 +29,3 @@ export {
   type FinalBoostConfig,
   type FinalBoostInput,
 } from './finalBoostCalculator';
-
-export {
-  buildEffectiveRidePath,
-} from './ridePathBuilder';
-
-export {
-  calculateLinearBoostPctAtElapsed,
-  buildLinearEffectiveRidePath,
-} from './linearRideMode';
-
-export { computeLinearModeMaxBoostPct, getMaxRideValue } from './rideReferenceMaximum';
-export { generatePhaseCorrectedRide, deriveFeasibleCrashPhase } from './feasibleRidePhase';

@@ -1,5 +1,5 @@
 import type { Selection } from './ticket';
-import type { RidePathPoint, MaximumModel, RidePhaseDiagnostics } from './ride';
+import type { RidePathPoint, MaximumModel, LegacyMaximumModel, RideMathSnapshotV4 } from './ride';
 import type { RideMode } from './rewardProfile';
 
 export interface BoostModelSnapshot {
@@ -19,14 +19,20 @@ export interface BetBoostLock {
   rewardId: string;
   lockedBoostPct: number;
   qualifyingSelections: number;
-  qualifyingOdds: number;
+  /**
+   * Combined odds of the qualifying selections. The service read path (boostLockService) returns the V4
+   * snapshot's value: an exact decimal string beyond the double range, a number otherwise. The table column
+   * itself is numeric (see CreateBetBoostLockInput).
+   */
+  qualifyingOdds: number | string;
   ticketStrength: number;
   snapshot: LockSnapshot;
   lockedAt: string;
   createdAt: string;
 }
 
-export interface LockSnapshot {
+/** Fields every lock snapshot has (read by settlement and by the lock read endpoints). */
+interface LockSnapshotCommon {
   selections: Selection[];
   disqualifiedSelections: Selection[];
   profileId: string;
@@ -42,26 +48,53 @@ export interface LockSnapshot {
   maxEligibilityOddsWeight: number;
   effectiveMinFloorRate: number;
   rideDurationSeconds: number;
-  checkpointCount: number;
-  volatility: number;
-  seed: string;
+  /** Crash time as a fraction of the ride (1 = no crash before the end). */
   crashPct: number;
   totalSelectionCount: number;
   qualifyingSelectionCount: number;
-  combinedOdds: number;
   ticketStrength: number;
-  rideValue: number;
-  maxRideValue: number;
+  /** Lock time as a fraction of the ride. */
   elapsedPct: number;
   effectiveMinBoostPct: number;
   maxEligibleBoostPct: number;
   maxPossibleBoostPct: number;
-  maximumModel?: MaximumModel;
-  mathSnapshotVersion?: 1 | 2 | 3;
-  phaseDiagnostics?: RidePhaseDiagnostics;
   boostModel: BoostModelSnapshot;
   ridePath: RidePathPoint[];
 }
+
+/**
+ * Lock snapshot of math version 4: freezes every payout input (the opt-in ride snapshot, which holds
+ * the seed commitment, never the seed) plus the boost and time at lock.
+ */
+export interface LockSnapshotV4 extends LockSnapshotCommon {
+  mathSnapshotVersion: 4;
+  maximumModel: MaximumModel;
+  /** Nearest double, or the exact decimal string when the product is beyond the double range. */
+  combinedOdds: number | string;
+  combinedOddsExact: string;
+  rideMath: RideMathSnapshotV4;
+  seedCommitment: string;
+  lockElapsedSeconds: number;
+  boostAtLock: number;
+}
+
+/**
+ * Lock snapshot written under the retired V1-V3 math. Stored data only: read back as stored by the lock
+ * and settlement endpoints, never recomputed.
+ */
+export interface LegacyLockSnapshot extends LockSnapshotCommon {
+  mathSnapshotVersion?: 1 | 2 | 3;
+  maximumModel?: LegacyMaximumModel;
+  combinedOdds: number;
+  checkpointCount: number;
+  volatility: number;
+  seed: string;
+  rideValue: number;
+  maxRideValue: number;
+  phaseDiagnostics?: unknown;
+}
+
+export type LockSnapshot = LockSnapshotV4 | LegacyLockSnapshot;
 
 export interface CreateBetBoostLockInput {
   brandId: string;
@@ -87,7 +120,8 @@ export interface LockResponse {
   reward_id: string;
   locked_boost_pct: number;
   qualifying_selections: number;
-  qualifying_odds: number;
+  /** Exact decimal string when the combined odds are beyond the double range. */
+  qualifying_odds: number | string;
   ticket_strength: number;
   locked_at: string;
   effective_min_boost_pct: number;
@@ -116,7 +150,7 @@ export interface BetBoostLockDTO {
   reward_id: string;
   locked_boost_pct: number;
   qualifying_selections: number;
-  qualifying_odds: number;
+  qualifying_odds: number | string;
   ticket_strength: number;
   locked_at: string;
   created_at: string;

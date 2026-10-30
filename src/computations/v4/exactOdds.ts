@@ -61,8 +61,15 @@ export function meetsTarget(odds: readonly OddsInput[], target: OddsInput): bool
 
 /** min(1, product / target): exactly 1 at or above the target, otherwise finite and below 1. */
 export function ratioToTarget(odds: readonly OddsInput[], target: OddsInput): number {
-  const product = combinedOddsExact(odds);
-  const goal = targetDecimal(target);
+  return exactRatio(combinedOddsExact(odds), targetDecimal(target));
+}
+
+/**
+ * min(1, value / goal) for exact decimals (goal > 0): exactly 1 when the exact comparison says the goal
+ * is met, otherwise finite and strictly below 1 (never NaN or Infinity, whatever the magnitudes).
+ */
+export function exactRatio(product: ExactDecimal, goal: ExactDecimal): number {
+  if (goal.units <= 0n) throw new Error('Target must be positive');
   if (compareExact(product, goal) >= 0) return 1;
   const numerator = product.units * 10n ** BigInt(goal.scale);
   if (numerator === 0n) return 0;
@@ -88,4 +95,47 @@ export function toDecimalString(value: ExactDecimal): string {
 export function toFiniteNumber(value: ExactDecimal): number | null {
   const approx = Number(toDecimalString(value));
   return Number.isFinite(approx) ? approx : null;
+}
+
+const SHORTEST_NUMBER_PATTERN = /^(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/;
+
+/**
+ * The exact decimal a finite non-negative number stands for, read from its shortest round-trip string
+ * (`String(value)`, as the settlement calculator reads odds). Any number of decimals and exponent
+ * notation are accepted, so profile targets such as 1e21 or 3.1234567 compare exactly.
+ */
+export function exactFromNumber(value: number): ExactDecimal {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('Expected a finite non-negative number');
+  }
+  const match = SHORTEST_NUMBER_PATTERN.exec(String(value));
+  if (!match) throw new Error('Expected a finite non-negative number');
+  const fraction = match[2] ?? '';
+  const exponent = match[3] === undefined ? 0 : Number(match[3]);
+  const units = BigInt(match[1] + fraction);
+  const scale = fraction.length - exponent;
+  return scale >= 0 ? { units, scale } : { units: units * 10n ** BigInt(-scale), scale: 0 };
+}
+
+/** True when the exact value is at or above the exact target. */
+export function meetsExactTarget(value: ExactDecimal, target: ExactDecimal): boolean {
+  return compareExact(value, target) >= 0;
+}
+
+/**
+ * Natural log of a positive exact decimal as a finite double, also beyond the double range
+ * (1e400 gives 921.03...). Inside the double range it is Math.log of the nearest double.
+ */
+export function lnExact(value: ExactDecimal): number {
+  if (value.units <= 0n) throw new Error('lnExact needs a positive value');
+  const approx = toFiniteNumber(value);
+  if (approx !== null && approx > 0) return Math.log(approx);
+  const digits = value.units.toString();
+  const lead = digits.slice(0, 17);
+  return Math.log(Number(`0.${lead}`)) + (digits.length - value.scale) * Math.LN10;
+}
+
+/** Display form: the nearest double, or the exact decimal string when no finite double exists. */
+export function toDisplayNumber(value: ExactDecimal): number | string {
+  return toFiniteNumber(value) ?? toDecimalString(value);
 }

@@ -1,6 +1,6 @@
-import type { MaximumModel } from '../types/ride';
+import type { MaximumModel } from './types';
 import { generateRide, interpolateRideValue, type RideCheckpoint } from './deterministicRideGenerator';
-import { calculateFinalBoostDetails } from './finalBoostCalculator';
+import { calculateFinalBoostDetails } from '../../../src/computations/finalBoostCalculator';
 
 // Preserve the checkpoint-only reference for historical rides. New rides use
 // the existing WAVES curve's pre-crash supremum as their LINEAR endpoint.

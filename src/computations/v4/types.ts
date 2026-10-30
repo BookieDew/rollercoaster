@@ -57,4 +57,9 @@ export interface V4Ride {
   boostAt(tSeconds: number): number;
   /** Same curve with the crash ignored (still 0 at/after the end). For audit and the F8 baseline. */
   uncrashedBoostAt(tSeconds: number): number;
+  /**
+   * Highest payout of the uncrashed curve on [0, min(t, duration)] (6 dp), exact (no sampling).
+   * maximumBefore(crash or end) is the ride's pre-crash maximum. Reveals the future: never for a live response.
+   */
+  maximumBefore(tSeconds: number): number;
 }

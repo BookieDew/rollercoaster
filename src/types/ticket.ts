@@ -39,7 +39,8 @@ export interface QuoteResponse {
   reason_code: EligibilityReasonCode;
   qualifying_selection_count: number;
   total_selection_count: number;
-  combined_odds: number;
+  /** Exact decimal string when the combined odds are beyond the double range (contract §4). */
+  combined_odds: number | string;
   current_boost_pct: number | null;
   effective_min_boost_pct: number | null;
   effective_max_boost_pct: number | null;
@@ -52,10 +53,4 @@ export interface QuoteResponse {
   ride_end_at_offset_seconds?: number | null;
   ride_crash_at_offset_seconds?: number | null;
   ride_path?: RidePathPoint[];
-}
-
-export interface QualifyingResult {
-  qualifyingSelections: Selection[];
-  disqualifiedSelections: Selection[];
-  combinedOdds: number;
 }

@@ -4,6 +4,7 @@ import db from '../../src/db/connection';
 import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
 import { ReasonCode } from '../../src/types/reasonCodes';
+import { liveMomentMs } from '../helpers/v4Rides';
 
 describe('Idempotency Integration Tests', () => {
   const API_KEY = 'test-api-key';
@@ -173,10 +174,7 @@ describe('Idempotency Integration Tests', () => {
 
       // Pin evaluation inside the pre-crash window so the race, not ride timing, decides the outcome.
       const row = await db('user_rewards').where({ id: rewardId }).first();
-      const math = JSON.parse(row.ticket_snapshot).rideMath;
-      const liveMs = Date.parse(math.startTime)
-        + Math.floor(math.rideDurationSeconds * math.crashPct * 1000 * 0.4);
-      jest.spyOn(Date, 'now').mockReturnValue(liveMs);
+      jest.spyOn(Date, 'now').mockReturnValue(liveMomentMs(JSON.parse(row.ticket_snapshot).rideMath));
     }
 
     /**

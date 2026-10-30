@@ -1,14 +1,17 @@
 import { rewardOptInService } from '../../src/services/rewardOptInService';
 import { userRewardRepository, BetAlreadyBoundError } from '../../src/db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
-import { rideDefinitionRepository } from '../../src/db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
-import * as computations from '../../src/computations';
-import * as rideGenerator from '../../src/computations/deterministicRideGenerator';
+import { computeTicketStrength } from '../../src/computations';
+import { combinedOddsExact, createV4Ride, seedCommitment } from '../../src/computations/v4';
+import { config } from '../../src/config';
+import type { RideMathSnapshotV4 } from '../../src/types/ride';
 import { ReasonCode } from '../../src/types/reasonCodes';
 import type { RewardProfileVersion } from '../../src/types/rewardProfile';
 import type { Selection } from '../../src/types/ticket';
 import type { UserReward } from '../../src/types/userReward';
+
+const SEED = '5eed'.repeat(16);
 
 function makeReward(overrides: Partial<UserReward> = {}): UserReward {
   const now = new Date().toISOString();
@@ -19,7 +22,7 @@ function makeReward(overrides: Partial<UserReward> = {}): UserReward {
     status: 'GRANTED',
     startTime: now,
     endTime: now,
-    seed: 'seed-1',
+    seed: SEED,
     betId: null,
     ticketSnapshot: null,
     optedInAt: null,
@@ -54,41 +57,28 @@ function makeProfile(overrides: Partial<RewardProfileVersion> = {}): RewardProfi
   };
 }
 
+/** Eligible for makeProfile: 5 qualifying selections, combined odds 1.7 x 1.8 x 2.1 x 1.5 x 1.6 = 15.4224. */
 function makeSelections(): Selection[] {
   return [
     { id: 's1', odds: 1.7 },
     { id: 's2', odds: 1.8 },
     { id: 's3', odds: 2.1 },
+    { id: 's4', odds: 1.5 },
+    { id: 's5', odds: 1.6 },
   ];
 }
 
-function setupPrecheckDefaults(): void {
-  jest.spyOn(computations, 'filterQualifyingSelections').mockReturnValue({
-    qualifying: makeSelections(),
-    disqualified: [],
-  });
-  jest.spyOn(computations, 'calculateCombinedOdds').mockReturnValue(12.5);
-  jest.spyOn(computations, 'computeTicketStrength').mockReturnValue(0.44);
-  jest.spyOn(computations, 'meetsMinSelectionCount').mockReturnValue(true);
-  jest.spyOn(computations, 'meetsCombinedOddsThreshold').mockReturnValue(true);
+/** 3 qualifying selections (minimum 5). */
+function tooFewSelections(): Selection[] {
+  return makeSelections().slice(0, 3);
+}
+
+/** 5 qualifying selections but combined odds 1.31^5 = 3.86 (minimum 10). */
+function lowOddsSelections(): Selection[] {
+  return Array.from({ length: 5 }, (_, i) => ({ id: `low${i}`, odds: 1.31 }));
 }
 
 function setupOptInDefaults(): void {
-  setupPrecheckDefaults();
-  jest.spyOn(rideGenerator, 'deriveRideDurationSeconds').mockReturnValue(8);
-  jest.spyOn(rideGenerator, 'deriveRideParams').mockReturnValue({
-    checkpointCount: 10,
-    volatility: 0.4,
-    crashPct: 0.7,
-  });
-  jest.spyOn(rideGenerator, 'generateRide').mockReturnValue({
-    seed: 'seed-1',
-    checkpoints: [
-      { index: 0, timeOffsetPct: 0, baseBoostValue: 0.11 },
-      { index: 1, timeOffsetPct: 1, baseBoostValue: 0 },
-    ],
-  });
-  jest.spyOn(rideDefinitionRepository, 'createMany').mockResolvedValue([]);
   jest.spyOn(userRewardRepository, 'updateStatus').mockResolvedValue(makeReward({ status: 'ENTERED' }));
   jest.spyOn(userRewardRepository, 'updateRideStart').mockResolvedValue(
     makeReward({ status: 'ENTERED', betId: 'bet-1' })
@@ -158,38 +148,52 @@ describe('rewardOptInService', () => {
       expect(result.error?.code).toBe(ReasonCode.PROFILE_NOT_FOUND);
     });
 
-    it('returns threshold failures and eligible response', async () => {
+    it('returns threshold failures and eligible response (exact combined odds)', async () => {
       jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
       jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
-      setupPrecheckDefaults();
 
-      (computations.meetsMinSelectionCount as jest.Mock).mockReturnValueOnce(false);
-      const minSelections = await rewardOptInService.precheckEligibility(
-        'reward-1',
-        'user-1',
-        makeSelections()
-      );
+      const minSelections = await rewardOptInService.precheckEligibility('reward-1', 'user-1', tooFewSelections());
       expect(minSelections.success).toBe(true);
       expect(minSelections.data?.reason_code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
-      expect(minSelections.data?.ticket_strength).toBe(0.44);
+      expect(minSelections.data?.qualifying_selection_count).toBe(3);
+      expect(minSelections.data?.ticket_strength).toBe(0);
 
-      (computations.meetsCombinedOddsThreshold as jest.Mock).mockReturnValueOnce(false);
-      const minOdds = await rewardOptInService.precheckEligibility(
-        'reward-1',
-        'user-1',
-        makeSelections()
-      );
+      const minOdds = await rewardOptInService.precheckEligibility('reward-1', 'user-1', lowOddsSelections());
       expect(minOdds.success).toBe(true);
       expect(minOdds.data?.reason_code).toBe(ReasonCode.MIN_COMBINED_ODDS_NOT_MET);
+      expect(minOdds.data?.combined_odds).toBe(3.8579489651);
 
-      const eligible = await rewardOptInService.precheckEligibility(
-        'reward-1',
-        'user-1',
-        makeSelections()
-      );
+      const eligible = await rewardOptInService.precheckEligibility('reward-1', 'user-1', makeSelections());
       expect(eligible.success).toBe(true);
       expect(eligible.data?.reason_code).toBe(ReasonCode.ELIGIBLE);
       expect(eligible.data?.eligible).toBe(true);
+      expect(eligible.data?.combined_odds).toBe(15.4224);
+      expect(eligible.data?.ticket_strength).toBe(
+        computeTicketStrength(5, combinedOddsExact([1.7, 1.8, 2.1, 1.5, 1.6]), { minSelections: 5 })
+      );
+      expect(eligible.data?.ticket_strength).toBeGreaterThan(0);
+    });
+
+    it('meets a combined-odds minimum exactly where the float product falls short', async () => {
+      // 1.1 x 1.15 x 1.15 = 1.45475 exactly; the float product is 1.4547499999999998.
+      jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+      jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(
+        makeProfile({ minSelections: 3, minCombinedOdds: 1.45475, minSelectionOdds: 1.01 })
+      );
+      const selections = [{ id: 'a', odds: 1.1 }, { id: 'b', odds: 1.15 }, { id: 'c', odds: 1.15 }];
+      expect(1.1 * 1.15 * 1.15).toBeLessThan(1.45475);
+      const result = await rewardOptInService.precheckEligibility('reward-1', 'user-1', selections);
+      expect(result.data?.reason_code).toBe(ReasonCode.ELIGIBLE);
+    });
+
+    it('reports combined odds beyond the double range as an exact decimal string', async () => {
+      jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
+      jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+      const huge = Array.from({ length: 100 }, (_, i) => ({ id: `h${i}`, odds: 10000 }));
+      const result = await rewardOptInService.precheckEligibility('reward-1', 'user-1', huge);
+      expect(result.data?.reason_code).toBe(ReasonCode.ELIGIBLE);
+      expect(result.data?.combined_odds).toBe('1' + '0'.repeat(400));
+      expect(result.data?.ticket_strength).toBe(1);
     });
   });
 
@@ -232,13 +236,15 @@ describe('rewardOptInService', () => {
       const missingProfile = await rewardOptInService.optIn('reward-1', input);
       expect(missingProfile.error?.code).toBe(ReasonCode.PROFILE_NOT_FOUND);
 
-      (computations.meetsMinSelectionCount as jest.Mock).mockReturnValueOnce(false);
-      const minSelections = await rewardOptInService.optIn('reward-1', input);
+      const minSelections = await rewardOptInService.optIn('reward-1', { ...input, selections: tooFewSelections() });
       expect(minSelections.error?.code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
 
-      (computations.meetsCombinedOddsThreshold as jest.Mock).mockReturnValueOnce(false);
-      const minCombined = await rewardOptInService.optIn('reward-1', input);
+      const minCombined = await rewardOptInService.optIn('reward-1', { ...input, selections: lowOddsSelections() });
       expect(minCombined.error?.code).toBe(ReasonCode.MIN_COMBINED_ODDS_NOT_MET);
+      expect(minCombined.error?.message).toContain('got 3.86');
+
+      expect(userRewardRepository.updateStatus).not.toHaveBeenCalled();
+      expect(auditLogRepository.append).not.toHaveBeenCalled();
     });
 
     it('maps a lost GRANTED claim, a bound bet and a missing row to service errors', async () => {
@@ -261,8 +267,7 @@ describe('rewardOptInService', () => {
       expect(missingRow.error?.code).toBe(ReasonCode.INTERNAL_ERROR);
       expect(missingRow.error?.message).toMatch(/start ride/i);
 
-      // None of the failed attempts wrote checkpoints or audit rows.
-      expect(rideDefinitionRepository.createMany).not.toHaveBeenCalled();
+      // None of the failed attempts wrote an audit row.
       expect(auditLogRepository.append).not.toHaveBeenCalled();
     });
 
@@ -270,15 +275,14 @@ describe('rewardOptInService', () => {
       jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
       jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
       setupOptInDefaults();
-      jest.spyOn(rideDefinitionRepository, 'createMany').mockRejectedValueOnce(new Error('disk full'));
+      jest.spyOn(auditLogRepository, 'append').mockRejectedValueOnce(new Error('disk full'));
 
       await expect(rewardOptInService.optIn('reward-1', input)).rejects.toThrow('disk full');
-      expect(auditLogRepository.append).not.toHaveBeenCalled();
     });
 
-    it('starts ride and returns success payload', async () => {
+    it.each(['WAVES', 'LINEAR'] as const)('%s: starts a V4 ride and freezes every payout input', async (rideMode) => {
       jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-      jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+      jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile({ rideMode }));
       setupOptInDefaults();
 
       const result = await rewardOptInService.optIn('reward-1', input);
@@ -286,7 +290,6 @@ describe('rewardOptInService', () => {
       expect(result.success).toBe(true);
       expect(result.data?.rideStarted).toBe(true);
       expect(result.data?.reward.status).toBe('ENTERED');
-      expect(rideDefinitionRepository.createMany).toHaveBeenCalledTimes(1);
       expect(auditLogRepository.append).toHaveBeenCalledTimes(1);
 
       // Conditional claim and every write share one transaction scope.
@@ -296,18 +299,56 @@ describe('rewardOptInService', () => {
       expect(statusCall[3]).toMatchObject({ fromStatus: 'GRANTED' });
       const tx = statusCall[3]?.tx;
       expect(tx).toBeDefined();
-      expect(jest.mocked(userRewardRepository.updateRideStart).mock.calls[0][5]).toBe(tx);
-      expect(jest.mocked(rideDefinitionRepository.createMany).mock.calls[0][1]).toBe(tx);
+      const [, startTime, endTime, betId, ticketSnapshot, startTx] = jest.mocked(userRewardRepository.updateRideStart).mock.calls[0];
+      expect(startTx).toBe(tx);
+      expect(betId).toBe('bet-1');
       expect(jest.mocked(auditLogRepository.append).mock.calls[0][1]).toBe(tx);
+
+      // The snapshot rebuilds exactly this ride from the seed.
+      const math = (ticketSnapshot as { rideMath: RideMathSnapshotV4 }).rideMath;
+      const ticketStrength = computeTicketStrength(5, combinedOddsExact([1.7, 1.8, 2.1, 1.5, 1.6]), { minSelections: 5 });
+      const ride = createV4Ride(SEED, {
+        mode: rideMode,
+        minBoostPct: 0.05,
+        maxBoostPct: 1,
+        effectiveMin: math.effectiveMinBoostPct,
+        effectiveMax: math.effectiveMaxBoostPct,
+        ticketStrength,
+        ...config.ride,
+        linearPace: rideMode === 'LINEAR' ? 'MEDIUM' : undefined,
+      });
+      expect(math).toMatchObject({
+        version: 4,
+        mathVersion: 'V4',
+        startTime,
+        endTime,
+        qualifyingSelectionCount: 5,
+        combinedOddsExact: '15.4224',
+        ticketStrength,
+        rideDurationSeconds: ride.params.durationSeconds,
+        outcome: ride.params.outcome,
+        crashAtSeconds: ride.params.crashAtSeconds,
+        crashBucket: ride.params.crashBucket,
+        crashPhase: ride.params.crashPhase,
+        linearPace: rideMode === 'LINEAR' ? 'MEDIUM' : null,
+        rideMaximumPct: ride.params.rideMaximum,
+        preCrashMaximumPct: ride.maximumBefore(ride.params.crashAtSeconds ?? ride.params.durationSeconds),
+        seedCommitment: seedCommitment(SEED),
+        minDurationSeconds: config.ride.minDurationSeconds,
+        maxDurationSeconds: config.ride.maxDurationSeconds,
+        minCrashSeconds: config.ride.minCrashSeconds,
+      });
+      expect(math.profile).toMatchObject({ id: 'profile-1', rideMode, minBoostPct: 0.05, maxBoostPct: 1 });
+      expect(Date.parse(endTime) - Date.parse(startTime)).toBe(Math.floor(ride.params.durationSeconds * 1000));
+      expect(math.seedCommitment).toMatch(/^[0-9a-f]{64}$/);
+
+      // Neither the snapshot nor the audit row carries the seed.
+      const payload = jest.mocked(auditLogRepository.append).mock.calls[0][0].payload;
+      expect(payload).toMatchObject({ mathSnapshotVersion: 4, seedCommitment: seedCommitment(SEED), combinedOdds: '15.4224' });
+      for (const stored of [ticketSnapshot, payload]) {
+        expect(JSON.stringify(stored)).not.toContain(SEED);
+        expect(JSON.stringify(stored)).not.toMatch(/"seed"/);
+      }
     });
-  });
-
-  it('gets ride checkpoints by reward id', async () => {
-    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    const checkpoints = [{ id: 'cp-1', rewardId: 'reward-1', checkpointIndex: 0, timeOffsetPct: 0, baseBoostValue: 0.1, createdAt: new Date().toISOString() }];
-    jest.spyOn(rideDefinitionRepository, 'findByRewardId').mockResolvedValue(checkpoints);
-
-    const result = await rewardOptInService.getRideCheckpoints('reward-1');
-    expect(result).toEqual(checkpoints);
   });
 });

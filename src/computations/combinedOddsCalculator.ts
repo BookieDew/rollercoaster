@@ -1,40 +1,33 @@
 import type { Selection } from '../types/ticket';
+import {
+  combinedOddsExact,
+  exactFromNumber,
+  meetsExactTarget,
+  type ExactDecimal,
+} from './v4/exactOdds';
 
 /**
- * Calculates combined (multiplied) odds from an array of qualifying selections.
- * For parlay/combo bets, the combined odds is the product of all individual odds.
- *
- * @param selections - Array of qualifying selections
- * @returns Combined odds (product of all selection odds)
+ * Combined (multiplied) odds of the qualifying selections, exact (V4, contract §4): each leg is read
+ * as an integer count of 10^-6 and the product is a BigInt, so no float product is ever formed and
+ * 100 legs at 10,000 stay exact. No selections give 0.
  */
-export function calculateCombinedOdds(selections: Selection[]): number {
-  if (selections.length === 0) {
-    return 0;
-  }
-
-  return selections.reduce((product, selection) => product * selection.odds, 1);
+export function calculateCombinedOddsExact(selections: Selection[]): ExactDecimal {
+  return combinedOddsExact(selections.map((selection) => selection.odds));
 }
 
-/**
- * Checks if combined odds meets the minimum threshold.
- *
- * @param combinedOdds - The calculated combined odds
- * @param minCombinedOdds - Minimum required combined odds
- * @returns True if the combined odds meets or exceeds the minimum
- */
+/** True when the exact combined odds are at or above the profile minimum (exact comparison). */
 export function meetsCombinedOddsThreshold(
-  combinedOdds: number,
+  combinedOdds: ExactDecimal,
   minCombinedOdds: number
 ): boolean {
-  return combinedOdds >= minCombinedOdds;
+  return meetsExactTarget(combinedOdds, exactFromNumber(minCombinedOdds));
 }
 
 /**
- * Rounds combined odds to a specified number of decimal places.
+ * Rounds odds to a number of decimal places (display helper).
  *
  * @param odds - The odds value to round
  * @param decimals - Number of decimal places (default: 4)
- * @returns Rounded odds value
  */
 export function roundOdds(odds: number, decimals = 4): number {
   const factor = Math.pow(10, decimals);

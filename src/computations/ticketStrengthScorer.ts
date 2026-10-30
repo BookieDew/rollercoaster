@@ -1,3 +1,5 @@
+import { lnExact, type ExactDecimal } from './v4/exactOdds';
+
 /**
  * Computes a non-linear (parabolic/convex) strength factor from qualifying selection count
  * and combined odds. Higher values yield disproportionately higher scores.
@@ -40,7 +42,7 @@ export interface TicketStrengthConfig {
  */
 export function computeTicketStrength(
   qualifyingCount: number,
-  combinedOdds: number,
+  combinedOdds: number | ExactDecimal,
   config: TicketStrengthConfig
 ): number {
   const {
@@ -52,7 +54,11 @@ export function computeTicketStrength(
     oddsWeight = 0.25,
   } = config;
 
-  if (qualifyingCount < minSelections || combinedOdds <= 1) {
+  // ln(combined odds); exact input stays finite beyond the double range (V4, contract §4).
+  const lnOdds = typeof combinedOdds === 'number'
+    ? (combinedOdds > 0 ? Math.log(combinedOdds) : -Infinity)
+    : (combinedOdds.units > 0n ? lnExact(combinedOdds) : -Infinity);
+  if (qualifyingCount < minSelections || !(lnOdds > 0)) {
     return 0;
   }
 
@@ -63,7 +69,7 @@ export function computeTicketStrength(
 
   // Odds factor: logarithmic scaling for combined odds
   // Higher odds = higher factor, using log to prevent extreme values
-  const oddsFactor = Math.log(combinedOdds) / Math.log(baseOdds * 100);
+  const oddsFactor = lnOdds / Math.log(baseOdds * 100);
 
   // Normalize weights defensively so callers can override without needing exact sums.
   const safeSelectionWeight = Math.max(selectionWeight, 0);

@@ -1,93 +1,84 @@
 import {
-  calculateCombinedOdds,
+  calculateCombinedOddsExact,
   meetsCombinedOddsThreshold,
   roundOdds,
 } from '../../src/computations/combinedOddsCalculator';
+import { toDecimalString, toFiniteNumber, type ExactDecimal } from '../../src/computations/v4';
 import type { Selection } from '../../src/types/ticket';
 
-describe('combinedOddsCalculator', () => {
-  describe('calculateCombinedOdds', () => {
-    it('should calculate product of all odds', () => {
-      const selections: Selection[] = [
-        { id: '1', odds: 2.0 },
-        { id: '2', odds: 3.0 },
-        { id: '3', odds: 1.5 },
-      ];
+const odds = (...values: number[]): Selection[] => values.map((value, i) => ({ id: String(i + 1), odds: value }));
+const exact = (...values: number[]): ExactDecimal => calculateCombinedOddsExact(odds(...values));
+const text = (...values: number[]): string => toDecimalString(exact(...values));
 
-      const result = calculateCombinedOdds(selections);
-
-      expect(result).toBe(9.0); // 2.0 * 3.0 * 1.5 = 9.0
+describe('combinedOddsCalculator (exact, V4)', () => {
+  describe('calculateCombinedOddsExact', () => {
+    it('should calculate the exact product of all odds', () => {
+      expect(text(2.0, 3.0, 1.5)).toBe('9');
     });
 
     it('should return 0 for empty selections', () => {
-      const result = calculateCombinedOdds([]);
-
-      expect(result).toBe(0);
+      expect(calculateCombinedOddsExact([])).toEqual({ units: 0n, scale: 0 });
+      expect(toFiniteNumber(calculateCombinedOddsExact([]))).toBe(0);
     });
 
     it('should return the odds for single selection', () => {
-      const selections: Selection[] = [{ id: '1', odds: 2.5 }];
-
-      const result = calculateCombinedOdds(selections);
-
-      expect(result).toBe(2.5);
+      expect(text(2.5)).toBe('2.5');
     });
 
-    it('should handle decimal odds correctly', () => {
-      const selections: Selection[] = [
-        { id: '1', odds: 1.25 },
-        { id: '2', odds: 1.50 },
-      ];
-
-      const result = calculateCombinedOdds(selections);
-
-      expect(result).toBeCloseTo(1.875, 4);
+    it('should handle decimal odds exactly', () => {
+      expect(text(1.25, 1.5)).toBe('1.875');
+      // 1.1 x 1.15 x 1.15 = 1.45475 exactly; the float product is 1.4547499999999998.
+      expect(1.1 * 1.15 * 1.15).not.toBe(1.45475);
+      expect(text(1.1, 1.15, 1.15)).toBe('1.45475');
     });
 
     it('should handle large combined odds', () => {
-      const selections: Selection[] = [
-        { id: '1', odds: 10.0 },
-        { id: '2', odds: 10.0 },
-        { id: '3', odds: 10.0 },
-      ];
+      expect(text(10.0, 10.0, 10.0)).toBe('1000');
+    });
 
-      const result = calculateCombinedOdds(selections);
-
-      expect(result).toBe(1000);
+    it('keeps combined odds beyond the double range exact and finite in comparisons', () => {
+      const product = exact(...Array.from({ length: 100 }, () => 10000));
+      expect(toDecimalString(product)).toBe('1' + '0'.repeat(400));
+      expect(toFiniteNumber(product)).toBeNull();
+      expect(meetsCombinedOddsThreshold(product, 3)).toBe(true);
     });
 
     it('should handle odds of 1 (no impact)', () => {
-      const selections: Selection[] = [
-        { id: '1', odds: 2.0 },
-        { id: '2', odds: 1.0 },
-        { id: '3', odds: 3.0 },
-      ];
-
-      const result = calculateCombinedOdds(selections);
-
-      expect(result).toBe(6.0);
+      expect(text(2.0, 1.0, 3.0)).toBe('6');
     });
   });
 
   describe('meetsCombinedOddsThreshold', () => {
     it('should return true when odds meet threshold', () => {
-      expect(meetsCombinedOddsThreshold(3.0, 3.0)).toBe(true);
+      expect(meetsCombinedOddsThreshold(exact(3.0), 3.0)).toBe(true);
     });
 
     it('should return true when odds exceed threshold', () => {
-      expect(meetsCombinedOddsThreshold(5.0, 3.0)).toBe(true);
+      expect(meetsCombinedOddsThreshold(exact(5.0), 3.0)).toBe(true);
     });
 
     it('should return false when odds are below threshold', () => {
-      expect(meetsCombinedOddsThreshold(2.5, 3.0)).toBe(false);
+      expect(meetsCombinedOddsThreshold(exact(2.5), 3.0)).toBe(false);
     });
 
     it('should handle zero odds', () => {
-      expect(meetsCombinedOddsThreshold(0, 3.0)).toBe(false);
+      expect(meetsCombinedOddsThreshold(calculateCombinedOddsExact([]), 3.0)).toBe(false);
     });
 
     it('should handle zero threshold', () => {
-      expect(meetsCombinedOddsThreshold(1.0, 0)).toBe(true);
+      expect(meetsCombinedOddsThreshold(exact(1.0), 0)).toBe(true);
+    });
+
+    it('compares exactly where the float product would miss the target', () => {
+      expect(meetsCombinedOddsThreshold(exact(1.1, 1.15, 1.15), 1.45475)).toBe(true);
+      expect(meetsCombinedOddsThreshold(exact(1.1, 1.15, 1.15), 1.454751)).toBe(false);
+      // Targets with more than 6 decimals or in exponent notation are read exactly.
+      expect(meetsCombinedOddsThreshold(exact(3), 2.9999999)).toBe(true);
+      expect(meetsCombinedOddsThreshold(exact(3), 3.0000001)).toBe(false);
+      const legs = (n: number) => exact(...Array.from({ length: n }, () => 10000));
+      expect(meetsCombinedOddsThreshold(legs(5), 1e21)).toBe(false); // 1e20 < 1e21
+      expect(meetsCombinedOddsThreshold(legs(6), 1e24)).toBe(true);
+      expect(meetsCombinedOddsThreshold(legs(6), 1.0000001e24)).toBe(false);
     });
   });
 

@@ -4,12 +4,11 @@ import {
   deriveRideParams,
   generatePhaseCorrectedRide,
   interpolateRideValue,
-  calculateFinalBoost,
-  computeBoostModelDetails,
   calculateLinearBoostPctAtElapsed,
   computeLinearModeMaxBoostPct,
   deriveFeasibleCrashPhase,
-} from '../../src/computations';
+} from './v3';
+import { calculateFinalBoost, computeBoostModelDetails } from '../../src/computations';
 
 const MIN_DURATION = 2;
 const MAX_DURATION = 15;

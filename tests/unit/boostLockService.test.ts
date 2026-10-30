@@ -1,35 +1,23 @@
 import { boostLockService } from '../../src/services/boostLockService';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
-import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
-import { rideDefinitionRepository } from '../../src/db/repositories/rideDefinitionRepository';
 import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
-import * as computations from '../../src/computations';
+import { config } from '../../src/config';
+import { seedCommitment } from '../../src/computations/v4';
+import { buildRideMath, toRideMathProfile } from '../../src/services/rideMathSnapshot';
+import { evaluateTicket } from '../../src/services/ticketEvaluation';
 import { ReasonCode } from '../../src/types/reasonCodes';
-import type { BetBoostLock, LockSnapshot } from '../../src/types/betBoostLock';
+import type { BetBoostLock, LegacyLockSnapshot, LockSnapshotV4 } from '../../src/types/betBoostLock';
 import type { RewardProfileVersion } from '../../src/types/rewardProfile';
+import type { RideMathSnapshotV4 } from '../../src/types/ride';
+import type { Selection } from '../../src/types/ticket';
 import type { UserReward } from '../../src/types/userReward';
+import { findSeed, liveMomentMs } from '../helpers/v4Rides';
 
-function makeReward(overrides: Partial<UserReward> = {}): UserReward {
-  const now = new Date();
-  const start = new Date(now.getTime() - 3_000).toISOString();
-  const end = new Date(now.getTime() + 7_000).toISOString();
-  return {
-    id: 'reward-1',
-    userId: 'user-1',
-    profileVersionId: 'profile-1',
-    status: 'ENTERED',
-    startTime: start,
-    endTime: end,
-    seed: 'seed-1',
-    betId: 'bet-1',
-    ticketSnapshot: { selections: [{ id: 's1', odds: 1.8 }, { id: 's2', odds: 1.9 }] },
-    optedInAt: now.toISOString(),
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    ...overrides,
-  };
-}
+const CRASH_SEED = findSeed('lock-crash', (p) => p.outcome === 'CRASHED');
+const END_SEED = findSeed('lock-end', (p) => p.outcome === 'ENDED');
+const START_MS = Date.parse('2026-10-30T10:00:00.000Z');
+const SELECTIONS: Selection[] = [{ id: 's1', odds: 1.8 }, { id: 's2', odds: 1.9 }];
 
 function makeProfile(overrides: Partial<RewardProfileVersion> = {}): RewardProfileVersion {
   const now = new Date().toISOString();
@@ -56,7 +44,42 @@ function makeProfile(overrides: Partial<RewardProfileVersion> = {}): RewardProfi
   };
 }
 
-function makeSnapshot(): LockSnapshot {
+/** The V4 opt-in snapshot of a ticket, as the opt-in service freezes it. */
+function rideMathFor(
+  seed = CRASH_SEED,
+  profile = makeProfile(),
+  selections = SELECTIONS
+): RideMathSnapshotV4 {
+  const frozen = toRideMathProfile(profile);
+  return buildRideMath(seed, frozen, evaluateTicket(selections, frozen), config.ride, START_MS).math;
+}
+
+function makeReward(overrides: Partial<UserReward> = {}, math = rideMathFor()): UserReward {
+  const now = new Date().toISOString();
+  return {
+    id: 'reward-1',
+    userId: 'user-1',
+    profileVersionId: 'profile-1',
+    status: 'ENTERED',
+    startTime: math.startTime,
+    endTime: math.endTime,
+    seed: CRASH_SEED,
+    betId: 'bet-1',
+    ticketSnapshot: { rideMath: math, selections: SELECTIONS },
+    optedInAt: now,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+/** Pins the service clock to a moment of the frozen ride. */
+function clockAt(ms: number): void {
+  jest.spyOn(Date, 'now').mockReturnValue(ms);
+}
+
+/** A lock stored under the retired V3 math: read back as stored. */
+function makeSnapshot(): LegacyLockSnapshot {
   return {
     selections: [{ id: 's1', odds: 1.8 }],
     disqualifiedSelections: [],
@@ -119,87 +142,8 @@ function makeLock(overrides: Partial<BetBoostLock> = {}): BetBoostLock {
 }
 
 function setupCoreMocks(): void {
-  jest.spyOn(computations, 'filterQualifyingSelections').mockReturnValue({
-    qualifying: [{ id: 's1', odds: 1.8 }, { id: 's2', odds: 1.9 }],
-    disqualified: [],
-  });
-  jest.spyOn(computations, 'calculateCombinedOdds').mockReturnValue(3.42);
-  jest.spyOn(computations, 'meetsMinSelectionCount').mockReturnValue(true);
-  jest.spyOn(computations, 'meetsCombinedOddsThreshold').mockReturnValue(true);
-  jest.spyOn(computations, 'computeTicketStrength').mockReturnValue(0.41);
-  jest.spyOn(computations, 'computeBoostModelDetails').mockReturnValue({
-    selectionWeight: 0.75,
-    oddsWeight: 0.25,
-    maxEligibilityExponent: 1.2,
-    effectiveMinFloorRate: 0.35,
-    selectionRatio: 0.5,
-    oddsRatio: 0.5,
-    eligibilityFactor: 0.5,
-    effectiveMinBoost: 0.1,
-    effectiveMaxBoost: 0.62,
-  });
-  jest.spyOn(computations, 'calculateElapsedPct').mockReturnValue(0.3);
-  jest.spyOn(computations, 'deriveRideParams').mockReturnValue({
-    checkpointCount: 10,
-    volatility: 0.4,
-    crashPct: 0.8,
-  });
-  jest.spyOn(computations, 'hasRideEnded').mockReturnValue(false);
-  jest.spyOn(computations, 'calculateFinalBoostDetails')
-    .mockReturnValueOnce({
-      finalBoostPct: 0.2,
-      minBoost: 0.1,
-      effectiveMaxBoost: 0.62,
-      rawBoost: 0.2,
-      isClampedToMax: false,
-      isClampedToMin: false,
-      boostModel: {
-        selectionWeight: 0.75,
-        oddsWeight: 0.25,
-        maxEligibilityExponent: 1.2,
-        effectiveMinFloorRate: 0.35,
-        selectionRatio: 0.5,
-        oddsRatio: 0.5,
-        eligibilityFactor: 0.5,
-        effectiveMinBoost: 0.1,
-        effectiveMaxBoost: 0.62,
-      },
-    })
-    .mockReturnValueOnce({
-      finalBoostPct: 0.4,
-      minBoost: 0.1,
-      effectiveMaxBoost: 0.62,
-      rawBoost: 0.4,
-      isClampedToMax: false,
-      isClampedToMin: false,
-      boostModel: {
-        selectionWeight: 0.75,
-        oddsWeight: 0.25,
-        maxEligibilityExponent: 1.2,
-        effectiveMinFloorRate: 0.35,
-        selectionRatio: 0.5,
-        oddsRatio: 0.5,
-        eligibilityFactor: 0.5,
-        effectiveMinBoost: 0.1,
-        effectiveMaxBoost: 0.62,
-      },
-    });
-  jest.spyOn(computations, 'interpolateRideValue').mockReturnValue(0.25);
-  jest.spyOn(computations, 'buildEffectiveRidePath').mockReturnValue([
-    { timePct: 0, baseBoostValue: 0.1 },
-    { timePct: 1, baseBoostValue: 0 },
-  ]);
-  jest.spyOn(computations, 'buildLinearEffectiveRidePath').mockReturnValue([
-    { timePct: 0, baseBoostValue: 0.1 },
-    { timePct: 1, baseBoostValue: 0 },
-  ]);
-  jest.spyOn(computations, 'calculateLinearBoostPctAtElapsed').mockReturnValue(0.33);
+  clockAt(liveMomentMs(rideMathFor()));
   jest.spyOn(betBoostLockRepository, 'create').mockResolvedValue(makeLock());
-  jest.spyOn(rideDefinitionRepository, 'findByRewardId').mockResolvedValue([
-    { id: 'cp-1', rewardId: 'reward-1', checkpointIndex: 0, timeOffsetPct: 0, baseBoostValue: 0.1, createdAt: new Date().toISOString() },
-    { id: 'cp-2', rewardId: 'reward-1', checkpointIndex: 1, timeOffsetPct: 0.6, baseBoostValue: 0.4, createdAt: new Date().toISOString() },
-    { id: 'cp-3', rewardId: 'reward-1', checkpointIndex: 2, timeOffsetPct: 1, baseBoostValue: 0, createdAt: new Date().toISOString() },
-  ]);
   jest.spyOn(userRewardRepository, 'updateStatus').mockResolvedValue(makeReward({ status: 'USED' }));
   jest.spyOn(auditLogRepository, 'append').mockResolvedValue({
     id: 'audit-1',
@@ -319,63 +263,107 @@ describe('boostLockService', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it('returns failures for missing ride state and profile/eligibility thresholds', async () => {
+  it('returns failures for missing ride state, unusable ride math and eligibility thresholds', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    const strict = makeProfile({ minSelections: 3 });
+    const highOdds = makeProfile({ minCombinedOdds: 4 });
     jest.spyOn(userRewardRepository, 'findById')
       .mockResolvedValueOnce(makeReward({ betId: null }))
-      .mockResolvedValueOnce(makeReward())
-      .mockResolvedValueOnce(makeReward())
-      .mockResolvedValueOnce(makeReward());
-    jest.spyOn(rewardProfileRepository, 'findById')
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(makeProfile())
-      .mockResolvedValueOnce(makeProfile());
+      .mockResolvedValueOnce(makeReward({ ticketSnapshot: { selections: SELECTIONS } }))
+      .mockResolvedValueOnce(makeReward({ ticketSnapshot: { selections: SELECTIONS, rideMath: { version: 3 } } }))
+      .mockResolvedValueOnce(makeReward({}, rideMathFor(CRASH_SEED, strict)))
+      .mockResolvedValueOnce(makeReward({}, rideMathFor(CRASH_SEED, highOdds)));
     setupCoreMocks();
 
     const missingRide = await boostLockService.lockBoost(input);
     expect(missingRide.error?.code).toBe(ReasonCode.NOT_OPTED_IN);
 
-    const missingProfile = await boostLockService.lockBoost(input);
-    expect(missingProfile.error?.code).toBe(ReasonCode.PROFILE_NOT_FOUND);
+    // Without a V4 snapshot the ride is never rebuilt from the mutable profile.
+    const noMath = await boostLockService.lockBoost(input);
+    expect(noMath.error?.code).toBe(ReasonCode.INVALID_CONFIGURATION);
+    expect(noMath.error?.message).toBe('Invalid saved ride math');
 
-    (computations.meetsMinSelectionCount as jest.Mock).mockReturnValueOnce(false);
+    // A retired V1-V3 ride is never recomputed.
+    const retired = await boostLockService.lockBoost(input);
+    expect(retired.error?.code).toBe(ReasonCode.INVALID_CONFIGURATION);
+    expect(retired.error?.message).toMatch(/retired math version/);
+
     const minSelections = await boostLockService.lockBoost(input);
     expect(minSelections.error?.code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
 
-    (computations.meetsCombinedOddsThreshold as jest.Mock).mockReturnValueOnce(false);
     const minCombined = await boostLockService.lockBoost(input);
     expect(minCombined.error?.code).toBe(ReasonCode.MIN_COMBINED_ODDS_NOT_MET);
+    expect(minCombined.error?.message).toBe('Minimum combined odds of 4 required, got 3.42');
+    expect(betBoostLockRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the snapshot does not match the seed or the rebuilt ride', async () => {
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    const math = rideMathFor();
+    jest.spyOn(userRewardRepository, 'findById')
+      .mockResolvedValueOnce(makeReward({ seed: END_SEED }))
+      .mockResolvedValueOnce(makeReward({}, { ...math, crashAtSeconds: (math.crashAtSeconds as number) + 0.5 }))
+      .mockResolvedValueOnce(makeReward({}, { ...math, rideMaximumPct: math.rideMaximumPct + 0.01 }))
+      .mockResolvedValueOnce(makeReward({ seed: 'not-a-seed' }))
+      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED', seed: END_SEED }));
+    setupCoreMocks();
+
+    for (let i = 0; i < 4; i += 1) {
+      const result = await boostLockService.lockBoost(input);
+      expect(result.error?.code).toBe(ReasonCode.INVALID_CONFIGURATION);
+    }
+    // An expired reward with unusable ride math is simply expired.
+    expect((await boostLockService.lockBoost(input)).error?.code).toBe(ReasonCode.REWARD_EXPIRED);
+    expect(betBoostLockRepository.create).not.toHaveBeenCalled();
   });
 
   it('returns RIDE_CRASHED and RIDE_ENDED states with ride details', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
-    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
+    const crashMath = rideMathFor(CRASH_SEED);
+    const endMath = rideMathFor(END_SEED);
+    jest.spyOn(userRewardRepository, 'findById')
+      .mockResolvedValueOnce(makeReward({}, crashMath))
+      .mockResolvedValueOnce(makeReward({ seed: END_SEED }, endMath))
+      .mockResolvedValueOnce(makeReward({ status: 'EXPIRED' }, crashMath));
     setupCoreMocks();
 
-    (computations.calculateElapsedPct as jest.Mock).mockReturnValueOnce(0.9);
+    clockAt(START_MS + Math.ceil((crashMath.crashAtSeconds as number) * 1000));
     const crashed = await boostLockService.lockBoost(input);
     expect(crashed.error?.code).toBe(ReasonCode.RIDE_CRASHED);
-    expect((crashed.error?.details as { current_boost_pct?: number })?.current_boost_pct).toBe(0);
+    const details = crashed.error?.details as Record<string, unknown>;
+    expect(details.current_boost_pct).toBe(0);
+    expect(details.ride_crash_at_offset_seconds).toBe(Math.round((crashMath.crashAtSeconds as number) * 1000) / 1000);
+    expect(details.theoretical_max_boost_pct).toBe(crashMath.preCrashMaximumPct);
+    expect(details.maximum_model).toBe('PRE_CRASH_SUPREMUM_V4');
+    expect(details.ride_path).toHaveLength(60);
 
-    (computations.deriveRideParams as jest.Mock).mockReturnValueOnce({
-      checkpointCount: 10,
-      volatility: 0.4,
-      crashPct: 1,
-    });
-    (computations.calculateElapsedPct as jest.Mock).mockReturnValueOnce(1.05);
-    (computations.hasRideEnded as jest.Mock).mockReturnValueOnce(true);
+    clockAt(Date.parse(endMath.endTime));
     const ended = await boostLockService.lockBoost(input);
     expect(ended.error?.code).toBe(ReasonCode.RIDE_ENDED);
+    expect((ended.error?.details as Record<string, unknown>).ride_crash_at_offset_seconds)
+      .toBe(Math.round(endMath.rideDurationSeconds * 1000) / 1000);
+
+    // Expiry never hides the outcome of an entered ride.
+    clockAt(START_MS + Math.ceil((crashMath.crashAtSeconds as number) * 1000));
+    expect((await boostLockService.lockBoost(input)).error?.code).toBe(ReasonCode.RIDE_CRASHED);
+    expect(betBoostLockRepository.create).not.toHaveBeenCalled();
   });
 
-  it('creates lock successfully in WAVES and LINEAR modes', async () => {
+  it('keeps an expired reward whose ride is still live unlockable', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
-    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    const profileSpy = jest.spyOn(rewardProfileRepository, 'findById')
-      .mockResolvedValueOnce(makeProfile({ rideMode: 'WAVES' }))
-      .mockResolvedValueOnce(makeProfile({ rideMode: 'LINEAR' }));
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({ status: 'EXPIRED' }));
     setupCoreMocks();
+    expect((await boostLockService.lockBoost(input)).error?.code).toBe(ReasonCode.REWARD_EXPIRED);
+    expect(betBoostLockRepository.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['WAVES', 'LINEAR'] as const)('%s: creates the lock from the frozen V4 ride and freezes every payout input', async (rideMode) => {
+    const math = rideMathFor(CRASH_SEED, makeProfile({ rideMode }));
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({}, math));
+    setupCoreMocks();
+    const lockAtMs = liveMomentMs(math);
+    clockAt(lockAtMs);
     jest.spyOn(betBoostLockRepository, 'create').mockImplementation(async (payload) => makeLock({
       lockedBoostPct: payload.lockedBoostPct,
       qualifyingSelections: payload.qualifyingSelections,
@@ -384,20 +372,92 @@ describe('boostLockService', () => {
       snapshot: payload.snapshot,
     }));
 
-    const waveResult = await boostLockService.lockBoost(input);
-    expect(waveResult.success).toBe(true);
-    expect(waveResult.data?.lock_id).toBe('lock-1');
+    const result = await boostLockService.lockBoost(input);
+    expect(result.success).toBe(true);
+    expect(result.data?.lock_id).toBe('lock-1');
 
-    const linearResult = await boostLockService.lockBoost(input);
-    expect(linearResult.success).toBe(true);
-    expect(linearResult.data?.locked_boost_pct).toBe(0.33);
-    expect(profileSpy).toHaveBeenCalledTimes(2);
+    const created = jest.mocked(betBoostLockRepository.create).mock.calls[0][0];
+    const snapshot = created.snapshot as LockSnapshotV4;
+    const elapsed = (lockAtMs - START_MS) / 1000;
+    expect(created.lockedBoostPct).toBeGreaterThan(0);
+    expect(created.qualifyingOdds).toBe(3.42);
+    expect(created.ticketStrength).toBe(math.ticketStrength);
+    expect(snapshot).toMatchObject({
+      mathSnapshotVersion: 4,
+      rideMath: math,
+      seedCommitment: seedCommitment(CRASH_SEED),
+      lockElapsedSeconds: elapsed,
+      boostAtLock: created.lockedBoostPct,
+      combinedOdds: 3.42,
+      combinedOddsExact: '3.42',
+      rideDurationSeconds: math.rideDurationSeconds,
+      crashPct: (math.crashAtSeconds as number) / math.rideDurationSeconds,
+      elapsedPct: elapsed / math.rideDurationSeconds,
+      effectiveMinBoostPct: math.effectiveMinBoostPct,
+      maxEligibleBoostPct: math.effectiveMaxBoostPct,
+      maxPossibleBoostPct: math.preCrashMaximumPct,
+      maximumModel: 'PRE_CRASH_SUPREMUM_V4',
+      rideMode,
+    });
+    expect(snapshot.ridePath).toHaveLength(60);
+    expect(JSON.stringify(snapshot)).not.toContain(CRASH_SEED);
+    expect(JSON.stringify(snapshot)).not.toMatch(/"seed"/);
+    const audit = jest.mocked(auditLogRepository.append).mock.calls[0][0].payload;
+    expect(audit).toMatchObject({ seedCommitment: seedCommitment(CRASH_SEED), mathSnapshotVersion: 4, combinedOdds: '3.42' });
+    expect(JSON.stringify(audit)).not.toContain(CRASH_SEED);
+
+    expect(result.data).toMatchObject({
+      locked_boost_pct: created.lockedBoostPct,
+      qualifying_odds: 3.42,
+      theoretical_max_boost_pct: math.preCrashMaximumPct,
+      maximum_model: 'PRE_CRASH_SUPREMUM_V4',
+      ride_stop_at_offset_seconds: Math.round(elapsed * 1000) / 1000,
+      ride_crash_at_offset_seconds: Math.round((math.crashAtSeconds as number) * 1000) / 1000,
+      ride_end_at_offset_seconds: Math.round(math.rideDurationSeconds * 1000) / 1000,
+    });
+  });
+
+  it('locks a ticket whose combined odds are beyond the double range and reports them exactly', async () => {
+    const huge = Array.from({ length: 100 }, (_, i) => ({ id: `h${i}`, odds: 10000 }));
+    const frozen = toRideMathProfile(makeProfile());
+    const math = buildRideMath(CRASH_SEED, frozen, evaluateTicket(huge, frozen), config.ride, START_MS).math;
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(
+      makeReward({ ticketSnapshot: { rideMath: math, selections: huge } }, math)
+    );
+    setupCoreMocks();
+    clockAt(liveMomentMs(math));
+    jest.spyOn(betBoostLockRepository, 'create').mockImplementation(async (payload) => makeLock({
+      qualifyingOdds: payload.qualifyingOdds,
+      snapshot: payload.snapshot,
+    }));
+
+    const result = await boostLockService.lockBoost(input);
+    expect(result.success).toBe(true);
+    expect(result.data?.qualifying_odds).toBe('1' + '0'.repeat(400));
+    const created = jest.mocked(betBoostLockRepository.create).mock.calls[0][0];
+    expect(Number.isFinite(created.qualifyingOdds)).toBe(true);
+    expect(created.ticketStrength).toBe(1);
+    expect((created.snapshot as LockSnapshotV4).combinedOddsExact).toBe('1' + '0'.repeat(400));
+    expect(created.snapshot.boostModel.oddsRatio).toBe(1);
+  });
+
+  it('replays a stored V3 lock as stored', async () => {
+    jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(makeLock());
+    jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward({ status: 'USED' }));
+    const result = await boostLockService.lockBoost(input);
+    expect(result.data).toMatchObject({
+      qualifying_odds: 3.4,
+      theoretical_max_boost_pct: 0.7,
+      ride_stop_at_offset_seconds: 3,
+      ride_crash_at_offset_seconds: 8,
+      ride_end_at_offset_seconds: 10,
+    });
   });
 
   it('passes one transaction scope to insert, conditional USED transition and audit', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
     jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
 
     const result = await boostLockService.lockBoost(input);
@@ -414,7 +474,6 @@ describe('boostLockService', () => {
 
   it('applies the replay rule after unique-key races without touching reward status', async () => {
     const findReward = jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
     jest.spyOn(betBoostLockRepository, 'findByBetId')
       .mockResolvedValueOnce(null)
@@ -464,7 +523,6 @@ describe('boostLockService', () => {
   });
 
   it('treats a lost ENTERED -> USED transition as a conflict and re-reads state', async () => {
-    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
     jest.spyOn(userRewardRepository, 'findById')
@@ -480,7 +538,6 @@ describe('boostLockService', () => {
   it('rethrows unexpected persistence errors', async () => {
     jest.spyOn(betBoostLockRepository, 'findByBetId').mockResolvedValue(null);
     jest.spyOn(userRewardRepository, 'findById').mockResolvedValue(makeReward());
-    jest.spyOn(rewardProfileRepository, 'findById').mockResolvedValue(makeProfile());
     setupCoreMocks();
     jest.spyOn(betBoostLockRepository, 'create').mockRejectedValueOnce(new Error('disk full'));
 

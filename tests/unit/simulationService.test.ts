@@ -56,7 +56,76 @@ describe('simulationService', () => {
     expect(result.data?.config.ride_mode).toBe('WAVES');
     expect(result.data?.ticket_analysis).toBeUndefined();
     expect(result.data?.curve).toHaveLength(21);
-    expect(result.data?.checkpoints.length).toBeGreaterThanOrEqual(3);
+    expect(result.data?.math_snapshot_version).toBe(4);
+    expect(result.data?.maximum_model).toBe('PRE_CRASH_SUPREMUM_V4');
+    expect(result.data?.ride.duration_seconds).toBeGreaterThan(0);
+  });
+
+  it('is reproducible for an explicit seed (hex or any string) and random by default', async () => {
+    const hex = 'ab'.repeat(32);
+    const a = await simulationService.simulateRide({ seed: hex, samplePoints: 20 });
+    const b = await simulationService.simulateRide({ seed: hex, samplePoints: 20 });
+    expect(a.data?.seed).toBe(hex);
+    expect(a.data).toEqual(b.data);
+    const named = await simulationService.simulateRide({ seed: 'sim-seed-default', samplePoints: 20 });
+    expect(named.data).toEqual((await simulationService.simulateRide({ seed: 'sim-seed-default', samplePoints: 20 })).data);
+    expect(named.data?.curve).not.toEqual(a.data?.curve);
+
+    const first = await simulationService.simulateRide({ samplePoints: 20 });
+    const second = await simulationService.simulateRide({ samplePoints: 20 });
+    expect(first.data?.seed).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.data?.seed).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.data?.seed).not.toBe(second.data?.seed);
+    // The returned default seed replays the same ride.
+    expect((await simulationService.simulateRide({ seed: first.data!.seed, samplePoints: 20 })).data).toEqual(first.data);
+  });
+
+  it('never uses Math.random for the default seed', async () => {
+    const random = jest.spyOn(Math, 'random');
+    await simulationService.simulateRide({ samplePoints: 10 });
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('reports the full V4 ride and zero from the crash or end on', async () => {
+    const result = (await simulationService.simulateRide({ seed: 'sim-seed-shape', samplePoints: 200 })).data!;
+    const terminal = result.ride.crash_at_seconds ?? result.ride.duration_seconds;
+    for (const point of result.curve) {
+      if (point.time_pct * result.ride.duration_seconds >= terminal + 1e-9) expect(point.base_ride_value).toBe(0);
+    }
+    expect(result.curve[result.curve.length - 1].final_boost_pct).toBe(0);
+    expect(result.config.crash_pct).toBeCloseTo(terminal / result.ride.duration_seconds, 12);
+    expect(result.ride.pre_crash_maximum_pct).toBeLessThanOrEqual(result.ride.ride_maximum_pct);
+    const sampledMax = Math.max(...result.curve.map((p) => p.base_ride_value));
+    expect(sampledMax).toBeLessThanOrEqual(Math.round(result.ride.pre_crash_maximum_pct * 10000) / 10000);
+  });
+
+  it('nulls final values for an ineligible ticket and keeps combined odds beyond the double range exact', async () => {
+    const result = await simulationService.simulateRide({
+      seed: 'sim-seed-huge',
+      samplePoints: 10,
+      ticket: { selections: Array.from({ length: 100 }, (_, i) => ({ id: `h${i}`, odds: 10000 })) },
+    });
+    expect(result.data?.eligible).toBe(true);
+    expect(result.data?.ticket_analysis?.combined_odds).toBe('1' + '0'.repeat(400));
+    expect(result.data?.ticket_analysis?.ticket_strength).toBe(1);
+    for (const value of [...Object.values(result.data!.config), ...Object.values(result.data!.ride)]) {
+      if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true);
+    }
+
+    const ineligible = await simulationService.simulateRide({
+      seed: 'sim-seed-huge',
+      samplePoints: 10,
+      ticket: { selections: [{ id: 'one', odds: 1.5 }] },
+    });
+    expect(ineligible.data?.eligible).toBe(false);
+    expect(ineligible.data?.reason_code).toBe(ReasonCode.MIN_SELECTIONS_NOT_MET);
+    expect(ineligible.data?.curve.every((p) => p.final_boost_pct === null)).toBe(true);
+  });
+
+  it('rejects a resolved minimum boost above the maximum', async () => {
+    const result = await simulationService.simulateRide({ minBoostPct: 0.6, maxBoostPct: 0.5 });
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe(ReasonCode.INVALID_CONFIGURATION);
   });
 
   it('uses profile config and computes ticket analysis', async () => {

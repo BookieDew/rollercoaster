@@ -1,26 +1,16 @@
 import { userRewardRepository } from '../db/repositories/userRewardRepository';
-import {
-  filterQualifyingSelections,
-  meetsMinSelectionCount,
-  calculateCombinedOdds,
-  meetsCombinedOddsThreshold,
-  computeTicketStrength,
-  computeLinearModeMaxBoostPct,
-  getMaxRideValue,
-  interpolateRideValue,
-  calculateElapsedPct,
-  hasRideEnded as checkRideEnded,
-  calculateFinalBoostDetails,
-  computeBoostModelDetails,
-  buildEffectiveRidePath,
-  buildLinearEffectiveRidePath,
-  calculateLinearBoostPctAtElapsed,
-} from '../computations';
 import type { BoostModelReport, Selection, QuoteResponse } from '../types/ticket';
-import type { RidePathPoint, MaximumModel } from '../types/ride';
+import { MAXIMUM_MODEL_V4 } from '../types/ride';
 import { ReasonCode, type EligibilityReasonCode } from '../types/reasonCodes';
 import type { UserReward } from '../types/userReward';
-import { resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
+import {
+  crashOffsetSeconds,
+  hasRetiredRideMath,
+  resolveRideMath,
+  rideClock,
+  sampleRidePath,
+} from './rideMathSnapshot';
+import { evaluateTicket, toBoostModelReport } from './ticketEvaluation';
 
 export interface QuoteInput {
   userId: string;
@@ -131,247 +121,79 @@ async function quoteExpiredReward(
     : expired;
 }
 
-/** Quote of a reward whose ride was started (unchanged ride evaluation). */
+/** Quote of a reward whose V4 ride was started. */
 async function quoteEnteredRide(
   reward: UserReward,
   betId: string
 ): Promise<ServiceResult<QuoteResponse>> {
-  const rewardId = reward.id;
-
-  // Prefer opt-in math inputs; old rides retain the explicit profile fallback.
-  const rideMath = await resolveRideMathSnapshot(reward);
-  if (!rideMath) {
-    const malformedSnapshot = reward.ticketSnapshot?.rideMath != null;
-    return {
-      success: false,
-      error: {
-        code: malformedSnapshot ? ReasonCode.INVALID_CONFIGURATION : ReasonCode.PROFILE_NOT_FOUND,
-        message: malformedSnapshot ? 'Invalid saved ride math' : 'Associated profile not found',
-      },
-    };
-  }
-
-  const profile = rideMath.profile;
-
   if (!reward.betId || reward.betId !== betId || !reward.ticketSnapshot) {
     return {
       success: true,
-      data: buildIneligibleResponse(
-        ReasonCode.NOT_OPTED_IN,
-        0,
-        0,
-        0
-      ),
+      data: buildIneligibleResponse(ReasonCode.NOT_OPTED_IN, 0, 0, 0),
     };
   }
+
+  // The frozen V4 ride; anything else (a retired V1-V3 ride, a damaged snapshot) fails closed.
+  const resolved = resolveRideMath(reward);
+  if (!resolved) {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.INVALID_CONFIGURATION,
+        message: hasRetiredRideMath(reward)
+          ? 'Ride uses a retired math version and cannot be quoted'
+          : 'Invalid saved ride math',
+      },
+    };
+  }
+  const { math, ride } = resolved;
 
   const storedSelections = (reward.ticketSnapshot.selections as Selection[]) ?? [];
-  const { qualifying } = filterQualifyingSelections(
-    storedSelections,
-    profile.minSelectionOdds
-  );
+  const ticket = evaluateTicket(storedSelections, math.profile);
+  const boostModel = toBoostModelReport(ticket.boostModel);
+  const effectiveMinBoostPct = math.effectiveMinBoostPct;
+  const effectiveMaxBoostPct = math.effectiveMaxBoostPct;
 
-  const combinedOdds = calculateCombinedOdds(qualifying);
-  const boostModelDetails = computeBoostModelDetails(
-    qualifying.length,
-    combinedOdds,
-    {
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-      maxBoostMinSelections: profile.maxBoostMinSelections,
-      maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-      maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
-      maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
-      effectiveMinFloorRate: profile.effectiveMinFloorRate,
-    }
-  );
-  const boostModel = toBoostModelReport(boostModelDetails);
-  const tentativeTicketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
-    minSelections: profile.minSelections,
-  });
-
-  // Check minimum selection count
-  if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
+  if (ticket.reason !== ReasonCode.ELIGIBLE) {
     return {
       success: true,
       data: buildIneligibleResponse(
-        ReasonCode.MIN_SELECTIONS_NOT_MET,
+        ticket.reason,
         storedSelections.length,
-        qualifying.length,
-        combinedOdds,
-        boostModelDetails.effectiveMinBoost,
-        boostModelDetails.effectiveMaxBoost,
+        ticket.qualifying.length,
+        ticket.combinedOddsDisplay,
+        effectiveMinBoostPct,
+        effectiveMaxBoostPct,
         null,
         null,
-        tentativeTicketStrength,
+        math.ticketStrength,
         boostModel
       ),
     };
   }
 
-  // Check minimum combined odds
-  if (!meetsCombinedOddsThreshold(combinedOdds, profile.minCombinedOdds)) {
+  const clock = rideClock(math, Date.now());
+  if (clock.crashed || clock.ended) {
     return {
       success: true,
-      data: buildIneligibleResponse(
-        ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
-        storedSelections.length,
-        qualifying.length,
-        combinedOdds,
-        boostModelDetails.effectiveMinBoost,
-        boostModelDetails.effectiveMaxBoost,
-        null,
-        null,
-        tentativeTicketStrength,
-        boostModel
-      ),
-    };
-  }
-
-  // Compute ticket strength
-  const ticketStrength = tentativeTicketStrength;
-
-  const evaluationTime = new Date(Date.now());
-  const elapsedPct = calculateElapsedPct(rideMath.startTime, rideMath.endTime, evaluationTime);
-  const rideElapsedSeconds = (evaluationTime.getTime() - new Date(rideMath.startTime).getTime()) / 1000;
-  const { rideDurationSeconds, crashPct, checkpointCount, volatility } = rideMath;
-  const crashOffsetSeconds = roundToDecimals(crashPct * rideDurationSeconds, 3);
-  const endOffsetSeconds = roundToDecimals(rideDurationSeconds, 3);
-
-  const finalBoostConfig = {
-    minBoostPct: profile.minBoostPct,
-    maxBoostPct: profile.maxBoostPct,
-    maxBoostMinSelections: profile.maxBoostMinSelections,
-    maxBoostMinCombinedOdds: profile.maxBoostMinCombinedOdds,
-    maxEligibilitySelectionWeight: profile.maxEligibilitySelectionWeight,
-    maxEligibilityOddsWeight: profile.maxEligibilityOddsWeight,
-    effectiveMinFloorRate: profile.effectiveMinFloorRate,
-  };
-  const isLinearRide = profile.rideMode === 'LINEAR';
-  let currentBoostPct: number;
-  let theoreticalMaxBoostPct: number;
-  let effectiveMinBoostPct: number;
-  let effectiveMaxBoostPct: number;
-  let ridePath: RidePathPoint[];
-
-  if (isLinearRide) {
-    effectiveMinBoostPct = boostModelDetails.effectiveMinBoost;
-    effectiveMaxBoostPct = boostModelDetails.effectiveMaxBoost;
-    const linearMaxBoostPct = computeLinearModeMaxBoostPct({
-      seed: reward.seed,
-      checkpointCount,
-      volatility,
-      rideDurationSeconds,
-      minPeakDelaySeconds: rideMath.minPeakDelaySeconds,
-      maximumModel: rideMath.maximumModel,
-      crashPct,
-      ticketStrength,
-      qualifyingSelections: qualifying.length,
-      combinedOdds,
-      config: finalBoostConfig,
-      minBoostPct: profile.minBoostPct,
-      maxBoostPct: profile.maxBoostPct,
-    });
-    currentBoostPct = calculateLinearBoostPctAtElapsed(
-      elapsedPct,
-      crashPct,
-      effectiveMinBoostPct,
-      linearMaxBoostPct
-    );
-    theoreticalMaxBoostPct = linearMaxBoostPct;
-    ridePath = buildLinearEffectiveRidePath(
-      60,
-      crashPct,
-      effectiveMinBoostPct,
-      linearMaxBoostPct
-    );
-  } else {
-    // Get ride checkpoints and current value for wave mode.
-    const checkpoints = await resolveRideCheckpoints(rewardId, rideMath);
-    const rideValue = interpolateRideValue(
-      checkpoints.map((cp) => ({
-        ...cp, index: cp.checkpointIndex,
-        timeOffsetPct: cp.timeOffsetPct,
-        baseBoostValue: cp.baseBoostValue,
-      })),
-      elapsedPct
-    );
-    ridePath = buildEffectiveRidePath(
-      checkpoints,
-      60,
-      crashPct,
-      ticketStrength,
-      finalBoostConfig,
-      qualifying.length,
-      combinedOdds
-    );
-
-    const currentBoostDetails = calculateFinalBoostDetails({
-      rideValue,
-      ticketStrength,
-      qualifyingSelections: qualifying.length,
-      combinedOdds,
-      hasRideEnded: false,
-      config: finalBoostConfig,
-    });
-    currentBoostPct = currentBoostDetails.finalBoostPct;
-    effectiveMinBoostPct = currentBoostDetails.minBoost;
-    effectiveMaxBoostPct = currentBoostDetails.effectiveMaxBoost;
-    const theoreticalMaxBoostDetails = calculateFinalBoostDetails({
-      rideValue: getMaxRideValue(checkpoints, crashPct, rideMath.maximumModel),
-      ticketStrength,
-      qualifyingSelections: qualifying.length,
-      combinedOdds,
-      hasRideEnded: false,
-      config: finalBoostConfig,
-    });
-    theoreticalMaxBoostPct = theoreticalMaxBoostDetails.finalBoostPct;
-  }
-
-  // Check if ride has crashed or ended
-  const rideCrashed = elapsedPct >= crashPct && crashPct < 1;
-  const rideEnded = checkRideEnded(rideMath.startTime, rideMath.endTime, evaluationTime);
-
-  if (rideCrashed) {
-    return {
-      success: true,
-      data: buildRideEndedResponse(
-        ReasonCode.RIDE_CRASHED,
-        storedSelections.length,
-        qualifying.length,
-        combinedOdds,
-        effectiveMinBoostPct,
-        effectiveMaxBoostPct,
-        ticketStrength,
-        theoreticalMaxBoostPct,
-        boostModel,
-        ridePath,
-        endOffsetSeconds,
-        crashOffsetSeconds,
-        rideElapsedSeconds,
-        rideMath.maximumModel
-      ),
-    };
-  }
-  if (rideEnded) {
-    return {
-      success: true,
-      data: buildRideEndedResponse(
-        ReasonCode.RIDE_ENDED,
-        storedSelections.length,
-        qualifying.length,
-        combinedOdds,
-        effectiveMinBoostPct,
-        effectiveMaxBoostPct,
-        ticketStrength,
-        theoreticalMaxBoostPct,
-        boostModel,
-        ridePath,
-        endOffsetSeconds,
-        crashOffsetSeconds,
-        rideElapsedSeconds,
-        rideMath.maximumModel
-      ),
+      data: {
+        eligible: false,
+        reason_code: clock.crashed ? ReasonCode.RIDE_CRASHED : ReasonCode.RIDE_ENDED,
+        qualifying_selection_count: ticket.qualifying.length,
+        total_selection_count: storedSelections.length,
+        combined_odds: ticket.combinedOddsDisplay,
+        current_boost_pct: 0,
+        ride_elapsed_seconds: clock.elapsedSeconds,
+        effective_min_boost_pct: effectiveMinBoostPct,
+        effective_max_boost_pct: effectiveMaxBoostPct,
+        theoretical_max_boost_pct: math.preCrashMaximumPct,
+        maximum_model: MAXIMUM_MODEL_V4,
+        ticket_strength: math.ticketStrength,
+        boost_model: boostModel,
+        ride_end_at_offset_seconds: roundToDecimals(math.rideDurationSeconds, 3),
+        ride_crash_at_offset_seconds: roundToDecimals(crashOffsetSeconds(math), 3),
+        ride_path: sampleRidePath(resolved),
+      },
     };
   }
 
@@ -380,17 +202,18 @@ async function quoteEnteredRide(
     data: {
       eligible: true,
       reason_code: ReasonCode.ELIGIBLE,
-      qualifying_selection_count: qualifying.length,
+      qualifying_selection_count: ticket.qualifying.length,
       total_selection_count: storedSelections.length,
-      combined_odds: combinedOdds,
-      current_boost_pct: currentBoostPct,
+      combined_odds: ticket.combinedOddsDisplay,
+      current_boost_pct: ride.boostAt(clock.elapsedSeconds),
       effective_min_boost_pct: effectiveMinBoostPct,
       effective_max_boost_pct: effectiveMaxBoostPct,
-      theoretical_max_boost_pct: theoreticalMaxBoostPct,
-      maximum_model: rideMath.maximumModel,
-      ticket_strength: ticketStrength,
+      // Internal only: getPublicQuote withholds it while the ride is live.
+      theoretical_max_boost_pct: math.preCrashMaximumPct,
+      maximum_model: MAXIMUM_MODEL_V4,
+      ticket_strength: math.ticketStrength,
       boost_model: boostModel,
-      ride_elapsed_seconds: rideElapsedSeconds,
+      ride_elapsed_seconds: clock.elapsedSeconds,
       ride_end_at_offset_seconds: null,
       ride_crash_at_offset_seconds: null,
     },
@@ -423,7 +246,7 @@ function buildIneligibleResponse(
   reasonCode: EligibilityReasonCode,
   totalCount: number,
   qualifyingCount: number,
-  combinedOdds: number,
+  combinedOdds: number | string,
   effectiveMinBoostPct: number | null = null,
   effectiveMaxBoostPct: number | null = null,
   endOffsetSeconds: number | null = null,
@@ -445,62 +268,6 @@ function buildIneligibleResponse(
     boost_model: boostModel,
     ride_end_at_offset_seconds: endOffsetSeconds,
     ride_crash_at_offset_seconds: crashOffsetSeconds,
-  };
-}
-
-function buildRideEndedResponse(
-  reasonCode: EligibilityReasonCode,
-  totalCount: number,
-  qualifyingCount: number,
-  combinedOdds: number,
-  effectiveMinBoostPct: number,
-  effectiveMaxBoostPct: number,
-  ticketStrength: number,
-  theoreticalMaxBoostPct: number,
-  boostModel: BoostModelReport,
-  ridePath: RidePathPoint[],
-  endOffsetSeconds: number,
-  crashOffsetSeconds: number,
-  rideElapsedSeconds: number,
-  maximumModel: MaximumModel
-): QuoteResponse {
-  return {
-    eligible: false,
-    reason_code: reasonCode,
-    qualifying_selection_count: qualifyingCount,
-    total_selection_count: totalCount,
-    combined_odds: combinedOdds,
-    current_boost_pct: 0,
-    ride_elapsed_seconds: rideElapsedSeconds,
-    effective_min_boost_pct: effectiveMinBoostPct,
-    effective_max_boost_pct: effectiveMaxBoostPct,
-    theoretical_max_boost_pct: theoreticalMaxBoostPct,
-    maximum_model: maximumModel,
-    ticket_strength: ticketStrength,
-    boost_model: boostModel,
-    ride_end_at_offset_seconds: endOffsetSeconds,
-    ride_crash_at_offset_seconds: crashOffsetSeconds,
-    ride_path: ridePath,
-  };
-}
-
-function toBoostModelReport(details: {
-  selectionWeight: number;
-  oddsWeight: number;
-  maxEligibilityExponent: number;
-  effectiveMinFloorRate: number;
-  selectionRatio: number | null;
-  oddsRatio: number | null;
-  eligibilityFactor: number;
-}): BoostModelReport {
-  return {
-    selection_weight: details.selectionWeight,
-    odds_weight: details.oddsWeight,
-    max_eligibility_exponent: details.maxEligibilityExponent,
-    effective_min_floor_rate: details.effectiveMinFloorRate,
-    selection_ratio: details.selectionRatio,
-    odds_ratio: details.oddsRatio,
-    eligibility_factor: details.eligibilityFactor,
   };
 }
 

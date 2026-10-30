@@ -11,7 +11,7 @@ import type {
   SettlementMinimums,
   SettlementOutcome,
 } from '../../src/computations/settlementCalculator';
-import { calculateCombinedOdds } from '../../src/computations/combinedOddsCalculator';
+import { calculateCombinedOddsExact, meetsCombinedOddsThreshold } from '../../src/computations/combinedOddsCalculator';
 import type { Selection } from '../../src/types/ticket';
 
 // ---------------------------------------------------------------------------
@@ -468,10 +468,12 @@ describe('settlementCalculator worked examples', () => {
   });
 
   describe('minimums re-check edge cases', () => {
-    it('uses an exact combined-odds comparison (opt-in float product would say not met)', () => {
+    it('uses an exact combined-odds comparison (a float product would say not met)', () => {
       // 1.01 x 1.63 = 1.6463 exactly, but the IEEE-754 product is 1.6462999999999999.
       const remaining = [sel('a', 1.01), sel('b', 1.63)];
-      expect(calculateCombinedOdds(remaining)).toBeLessThan(1.6463);
+      expect(1.01 * 1.63).toBeLessThan(1.6463);
+      // Opt-in/quote/lock (V4) compare exactly too, so they agree with settlement.
+      expect(meetsCombinedOddsThreshold(calculateCombinedOddsExact(remaining), 1.6463)).toBe(true);
       const result = settle({
         storedSelections: [...remaining, sel('c', 2.0)],
         legs: legsOf({ a: 'WON', b: 'WON', c: 'CANCELLED' }),

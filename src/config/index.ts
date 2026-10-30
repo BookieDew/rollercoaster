@@ -70,6 +70,8 @@ export const KNOWN_INSECURE_SECRETS: ReadonlySet<string> = new Set([
 ]);
 
 const DEFAULT_DATABASE_URL = 'sqlite://./dev.db';
+/** Smallest minimum crash time the V4 ride math supports (crash phase by construction). */
+export const MIN_CRASH_SECONDS_FLOOR = 0.4;
 const SECRET_NAMES = ['API_KEY_SECRET', 'ADMIN_API_KEY_SECRET', 'HMAC_SECRET'] as const;
 type SecretName = (typeof SECRET_NAMES)[number];
 
@@ -256,11 +258,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (minDuration !== undefined && maxDuration !== undefined && minDuration > maxDuration) {
     issues.push('RIDE_MIN_DURATION_SECONDS must be less than or equal to RIDE_MAX_DURATION_SECONDS');
   }
-  if (minCrash !== undefined && minCrash < 0) {
-    issues.push('RIDE_MIN_CRASH_SECONDS must be at least 0');
+  // V4 ride math: every ride must be able to crash (otherwise the duration would predict the outcome),
+  // and the crash phase is built by construction only from 0.4 s on.
+  if (minCrash !== undefined && minCrash < MIN_CRASH_SECONDS_FLOOR) {
+    issues.push(`RIDE_MIN_CRASH_SECONDS must be at least ${MIN_CRASH_SECONDS_FLOOR}`);
   }
-  if (minCrash !== undefined && maxDuration !== undefined && minCrash > maxDuration) {
-    issues.push('RIDE_MIN_CRASH_SECONDS must be less than or equal to RIDE_MAX_DURATION_SECONDS');
+  if (minCrash !== undefined && minDuration !== undefined && minDuration > 0 && minCrash > minDuration) {
+    issues.push('RIDE_MIN_CRASH_SECONDS must be less than or equal to RIDE_MIN_DURATION_SECONDS');
+  }
+  if (minCrash !== undefined && maxDuration !== undefined && minCrash >= maxDuration) {
+    issues.push('RIDE_MIN_CRASH_SECONDS must be less than RIDE_MAX_DURATION_SECONDS');
   }
 
   const port = parseVar(issues, 'PORT', env.PORT ?? '3000', wholeNumber(1, 65535));

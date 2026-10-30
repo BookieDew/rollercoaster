@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { RideMode } from '../types/rewardProfile';
+import type { RideMode } from './types';
 
 export interface RideCheckpoint {
   index: number;

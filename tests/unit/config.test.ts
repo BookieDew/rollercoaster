@@ -302,13 +302,13 @@ describe('loadConfig validation', () => {
         HMAC_MAX_SKEW_MS: '60000',
         HMAC_REPLAY_CACHE_SIZE: '1',
         RIDE_MIN_DURATION_SECONDS: '0.5',
-        RIDE_MAX_DURATION_SECONDS: '0.5',
-        RIDE_MIN_CRASH_SECONDS: '0',
+        RIDE_MAX_DURATION_SECONDS: '0.6',
+        RIDE_MIN_CRASH_SECONDS: '0.4',
       });
       expect(config.server.port).toBe(8080);
       expect(config.api.hmacMaxSkewMs).toBe(60000);
       expect(config.api.hmacReplayCacheSize).toBe(1);
-      expect(config.ride).toEqual({ minDurationSeconds: 0.5, maxDurationSeconds: 0.5, minCrashSeconds: 0 });
+      expect(config.ride).toEqual({ minDurationSeconds: 0.5, maxDurationSeconds: 0.6, minCrashSeconds: 0.4 });
     });
 
     it('enforces ride timing relationships', () => {
@@ -319,14 +319,36 @@ describe('loadConfig validation', () => {
         RIDE_MIN_CRASH_SECONDS: '11',
       })).toEqual([
         'RIDE_MIN_DURATION_SECONDS must be less than or equal to RIDE_MAX_DURATION_SECONDS',
-        'RIDE_MIN_CRASH_SECONDS must be less than or equal to RIDE_MAX_DURATION_SECONDS',
+        'RIDE_MIN_CRASH_SECONDS must be less than RIDE_MAX_DURATION_SECONDS',
       ]);
       expect(configIssues({ NODE_ENV: 'development', RIDE_MIN_DURATION_SECONDS: '0' })).toEqual([
         'RIDE_MIN_DURATION_SECONDS must be greater than 0',
       ]);
       expect(configIssues({ NODE_ENV: 'development', RIDE_MIN_CRASH_SECONDS: '-1' })).toEqual([
-        'RIDE_MIN_CRASH_SECONDS must be at least 0',
+        'RIDE_MIN_CRASH_SECONDS must be at least 0.4',
       ]);
+    });
+
+    it('enforces the V4 minimum-crash rules (0.4 s floor, at most the minimum duration, below the maximum)', () => {
+      expect(configIssues({ NODE_ENV: 'development', RIDE_MIN_DURATION_SECONDS: '0.5', RIDE_MIN_CRASH_SECONDS: '0.39' })).toEqual([
+        'RIDE_MIN_CRASH_SECONDS must be at least 0.4',
+      ]);
+      expect(loadConfigFromEnv({ NODE_ENV: 'development', RIDE_MIN_DURATION_SECONDS: '0.5', RIDE_MIN_CRASH_SECONDS: '0.4' }).ride)
+        .toEqual({ minDurationSeconds: 0.5, maxDurationSeconds: 15, minCrashSeconds: 0.4 });
+      expect(configIssues({ NODE_ENV: 'development', RIDE_MIN_DURATION_SECONDS: '2', RIDE_MIN_CRASH_SECONDS: '2.5' })).toEqual([
+        'RIDE_MIN_CRASH_SECONDS must be less than or equal to RIDE_MIN_DURATION_SECONDS',
+      ]);
+      expect(configIssues({
+        NODE_ENV: 'development',
+        RIDE_MIN_DURATION_SECONDS: '3',
+        RIDE_MAX_DURATION_SECONDS: '3',
+        RIDE_MIN_CRASH_SECONDS: '3',
+      })).toEqual([
+        'RIDE_MIN_CRASH_SECONDS must be less than RIDE_MAX_DURATION_SECONDS',
+      ]);
+      // The defaults (2-15 s, minimum crash 2 s) are valid.
+      expect(loadConfigFromEnv({ NODE_ENV: 'development' }).ride)
+        .toEqual({ minDurationSeconds: 2, maxDurationSeconds: 15, minCrashSeconds: 2 });
       expect(configIssues({ NODE_ENV: 'development', DATABASE_POOL_MIN: '5', DATABASE_POOL_MAX: '2' })).toEqual([
         'DATABASE_POOL_MIN must be less than or equal to DATABASE_POOL_MAX',
       ]);

@@ -1,3 +1,5 @@
+import { exactFromNumber, exactRatio, type ExactDecimal } from './v4/exactOdds';
+
 export interface FinalBoostConfig {
   minBoostPct: number;
   maxBoostPct: number;
@@ -129,9 +131,14 @@ export function computeMaxEligibleBoostPct(
   ).effectiveMaxBoost;
 }
 
+/**
+ * Ticket-adjusted floor and cap. `combinedOdds` may be the exact product (V4 live paths): the odds
+ * ratio is then min(1, product / target) by exact comparison, so it is exactly 1 at or above the
+ * target and finite below it, even for combined odds beyond the double range (contract §4).
+ */
 export function computeBoostModelDetails(
   qualifyingSelections: number,
-  combinedOdds: number,
+  combinedOdds: number | ExactDecimal,
   config: FinalBoostConfig
 ): BoostModelDetails {
   const selectionWeight = config.maxEligibilitySelectionWeight ?? MAX_ELIGIBILITY_SELECTION_WEIGHT;
@@ -146,9 +153,11 @@ export function computeBoostModelDetails(
   const selectionRatio = hasSelectionTarget
     ? Math.max(0, Math.min(qualifyingSelections / selectionTarget, 1))
     : null;
-  const oddsRatio = hasOddsTarget
-    ? Math.max(0, Math.min(combinedOdds / oddsTarget, 1))
-    : null;
+  const oddsRatio = !hasOddsTarget
+    ? null
+    : typeof combinedOdds === 'number'
+      ? Math.max(0, Math.min(combinedOdds / oddsTarget, 1))
+      : exactRatio(combinedOdds, exactFromNumber(oddsTarget));
 
   let eligibilityFactor: number;
   if (!hasAnyTarget) {

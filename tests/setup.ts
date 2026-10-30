@@ -9,6 +9,8 @@ process.env.HMAC_MAX_SKEW_MS = '300000';
 process.env.HMAC_REPLAY_CACHE_SIZE = '1000';
 process.env.RIDE_MIN_DURATION_SECONDS = '0.5';
 process.env.RIDE_MAX_DURATION_SECONDS = '10';
+// V4 needs 0.4 <= min crash <= min duration.
+process.env.RIDE_MIN_CRASH_SECONDS = '0.5';
 process.env.DATABASE_URL = 'sqlite://:memory:';
 
 // Cause of rare `read ECONNRESET`: supertest's listen(0) binds the wildcard address, so macOS can pick a port another process holds on 127.0.0.1, where supertest then connects.

@@ -3,7 +3,7 @@ import { userRewardRepository } from '../db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import { runInTransaction, type TransactionScope } from '../db/repositories/transaction';
-import { deriveRideDurationSeconds } from '../computations/deterministicRideGenerator';
+import { seedCommitment, v4RideDurationSeconds } from '../computations/v4';
 import { config } from '../config';
 import type { UserReward } from '../types/userReward';
 import { ReasonCode } from '../types/reasonCodes';
@@ -65,11 +65,7 @@ export async function grantReward(
   const now = new Date();
   const startTime = now.toISOString();
   const seed = createRideSeed();
-  const duration = deriveRideDurationSeconds(
-    seed,
-    config.ride.minDurationSeconds,
-    config.ride.maxDurationSeconds
-  );
+  const duration = v4RideDurationSeconds(seed, config.ride);
   const endTime = new Date(now.getTime() + duration * 1000).toISOString();
   // Legacy profiles have no validity and their rewards never expire.
   const brandId = profile.brandId ?? LEGACY_BRAND_ID;
@@ -103,7 +99,8 @@ export async function grantReward(
         requestedDurationSeconds: durationSeconds,
         minDurationSeconds: config.ride.minDurationSeconds,
         maxDurationSeconds: config.ride.maxDurationSeconds,
-        seed,
+        // Never the seed itself (contract §1): its SHA-256 commitment.
+        seedCommitment: seedCommitment(seed),
       },
     }, tx);
 
@@ -134,11 +131,7 @@ export async function issueReplacementReward(
   now: Date = new Date()
 ): Promise<UserReward> {
   const seed = createRideSeed();
-  const duration = deriveRideDurationSeconds(
-    seed,
-    config.ride.minDurationSeconds,
-    config.ride.maxDurationSeconds
-  );
+  const duration = v4RideDurationSeconds(seed, config.ride);
   const startTime = now.toISOString();
   const endTime = new Date(now.getTime() + duration * 1000).toISOString();
   const brandId = original.brandId ?? LEGACY_BRAND_ID;
@@ -171,7 +164,7 @@ export async function issueReplacementReward(
       startTime,
       endTime,
       durationSeconds: duration,
-      seed,
+      seedCommitment: seedCommitment(seed),
     },
   }, tx);
 

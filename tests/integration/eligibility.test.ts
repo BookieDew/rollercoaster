@@ -2,6 +2,7 @@ import request from 'supertest';
 import { app } from '../../src/index';
 import db from '../../src/db/connection';
 import { ReasonCode } from '../../src/types/reasonCodes';
+import { findSeed } from '../helpers/v4Rides';
 
 describe('Eligibility Integration Tests', () => {
   const API_KEY = 'test-api-key';
@@ -351,10 +352,10 @@ describe('Eligibility Integration Tests', () => {
     });
 
     it('should return RIDE_ENDED when ride reaches end without pre-end crash', async () => {
-      // This seed deterministically takes the "no pre-end crash" path in deriveCrashPct.
+      // A seed whose V4 ride takes the 8 % no-crash path (outcome ENDED).
       await db('user_rewards')
         .where({ id: rewardId })
-        .update({ seed: 'ride-ended-seed-20' });
+        .update({ seed: findSeed('ride-ended', (p) => p.outcome === 'ENDED') });
 
       await request(app)
         .post(`/api/rewards/${rewardId}/opt-in`)
@@ -377,8 +378,9 @@ describe('Eligibility Integration Tests', () => {
       // to the persisted end instead of mutating one copy of the schedule.
       const rewardRow = await db('user_rewards').where({ id: rewardId }).first();
       const snapshot = JSON.parse(rewardRow.ticket_snapshot);
-      expect(snapshot.rideMath.version).toBe(3);
-      expect(snapshot.rideMath.crashPct).toBe(1);
+      expect(snapshot.rideMath.version).toBe(4);
+      expect(snapshot.rideMath.outcome).toBe('ENDED');
+      expect(snapshot.rideMath.crashAtSeconds).toBeNull();
       jest.spyOn(Date, 'now').mockReturnValue(new Date(snapshot.rideMath.endTime).getTime());
 
       const quoteRes = await request(app)
@@ -393,7 +395,10 @@ describe('Eligibility Integration Tests', () => {
       expect(quoteRes.status).toBe(200);
       expect(quoteRes.body.eligible).toBe(false);
       expect(quoteRes.body.reason_code).toBe(ReasonCode.RIDE_ENDED);
-      expect(quoteRes.body.ride_elapsed_seconds).toBe(snapshot.rideMath.rideDurationSeconds);
+      expect(quoteRes.body.ride_elapsed_seconds).toBe(
+        (Date.parse(snapshot.rideMath.endTime) - Date.parse(snapshot.rideMath.startTime)) / 1000
+      );
+      expect(quoteRes.body.ride_crash_at_offset_seconds).toBe(quoteRes.body.ride_end_at_offset_seconds);
       expect(quoteRes.body.current_boost_pct).toBe(0);
       expect(quoteRes.body.theoretical_max_boost_pct).toBeGreaterThan(0);
       expect(quoteRes.body.ride_end_at_offset_seconds).toBeGreaterThan(0);

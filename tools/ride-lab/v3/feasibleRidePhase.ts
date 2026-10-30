@@ -1,8 +1,8 @@
 import { createHash } from 'crypto';
 import { generateRide, type RideConfig, type RideCheckpoint, type CrashPhase } from './deterministicRideGenerator';
-import { calculateFinalBoost, computeBoostModelDetails, type FinalBoostConfig } from './finalBoostCalculator';
+import { calculateFinalBoost, computeBoostModelDetails, type FinalBoostConfig } from '../../../src/computations/finalBoostCalculator';
 import { getMaxRideValue } from './rideReferenceMaximum';
-import type { RidePhaseDiagnostics } from '../types/ride';
+import type { RidePhaseDiagnostics } from './types';
 
 export interface PhaseRideConfig extends RideConfig {
   qualifyingSelections: number;

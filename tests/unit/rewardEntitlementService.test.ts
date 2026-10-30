@@ -1,5 +1,6 @@
 import { rewardEntitlementService, createRideSeed } from '../../src/services/rewardEntitlementService';
-import { generateSeed, deriveRideDurationSeconds } from '../../src/computations/deterministicRideGenerator';
+import { seedCommitment, v4RideDurationSeconds } from '../../src/computations/v4';
+import { legacyPublicIdSeed } from '../helpers/v4Rides';
 import { config } from '../../src/config';
 import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
@@ -112,16 +113,16 @@ describe('rewardEntitlementService', () => {
       expect(tx).toBeDefined();
       expect(auditSpy.mock.calls[0][1]).toBe(tx);
       expect(createInput.seed).toMatch(/^[0-9a-f]{64}$/);
-      expect(createInput.seed).not.toBe(generateSeed(createdReward.id, createdReward.userId, createdReward.profileVersionId));
-      // Stored end time still follows the unchanged seed-derived duration.
-      const duration = deriveRideDurationSeconds(
-        createInput.seed,
-        config.ride.minDurationSeconds,
-        config.ride.maxDurationSeconds
-      );
+      expect(createInput.seed).not.toBe(legacyPublicIdSeed(createdReward.id, createdReward.userId, createdReward.profileVersionId));
+      // Stored end time follows the V4 seed-derived duration.
+      const duration = v4RideDurationSeconds(createInput.seed, config.ride);
       const storedMs = Date.parse(createInput.endTime) - Date.parse(createInput.startTime);
       expect(Math.abs(storedMs - duration * 1000)).toBeLessThan(1);
-      expect(auditSpy.mock.calls[0][0].payload).toMatchObject({ seed: createInput.seed, requestedDurationSeconds: 999 });
+      // The audit row carries the seed's SHA-256 commitment, never the seed.
+      const payload = auditSpy.mock.calls[0][0].payload;
+      expect(payload).toMatchObject({ seedCommitment: seedCommitment(createInput.seed), requestedDurationSeconds: 999 });
+      expect(payload).not.toHaveProperty('seed');
+      expect(JSON.stringify(payload)).not.toContain(createInput.seed);
     });
 
     it('createRideSeed returns distinct 32-byte hex values', () => {

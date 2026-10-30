@@ -4,6 +4,11 @@ import { app } from '../../src/index';
 import db from '../../src/db/connection';
 import { expireRewards } from '../../src/services/rewardExpiryService';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
+import { findSeed } from '../helpers/v4Rides';
+
+/** V4 seeds (test ride limits): one that crashes at least 1 s before its end, one that never crashes. */
+const CRASH_SEED = findSeed('expiry-crash', (p) => p.outcome === 'CRASHED' && (p.crashAtSeconds as number) < p.durationSeconds - 1);
+const END_SEED = findSeed('expiry-end', (p) => p.outcome === 'ENDED');
 
 const API_KEY = 'test-api-key';
 const HMAC_SECRET = 'test-hmac-secret';
@@ -49,12 +54,18 @@ async function setValidUntil(rewardId: string, validUntil: string | null): Promi
   await db('user_rewards').where({ id: rewardId }).update({ valid_until: validUntil });
 }
 
-async function rideOf(rewardId: string): Promise<{ startMs: number; endMs: number; durationMs: number }> {
+/** Gives a GRANTED reward a chosen V4 seed, so its ride outcome is known before opt-in. */
+async function useSeed(rewardId: string, seed: string): Promise<void> {
+  await db('user_rewards').where({ id: rewardId }).update({ seed });
+}
+
+async function rideOf(rewardId: string): Promise<{ startMs: number; endMs: number; durationMs: number; crashMs: number | null }> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
   const math = JSON.parse(row.ticket_snapshot).rideMath;
   const startMs = Date.parse(math.startTime);
   const endMs = Date.parse(math.endTime);
-  return { startMs, endMs, durationMs: endMs - startMs };
+  const crashMs = math.crashAtSeconds === null ? null : startMs + math.crashAtSeconds * 1000;
+  return { startMs, endMs, durationMs: endMs - startMs, crashMs };
 }
 
 async function expireAudit(rewardId: string) {
@@ -172,16 +183,14 @@ describe('Reward expiry job', () => {
     it('expires an ENTERED ride after its crash even though the ride has not ended', async () => {
       const profileId = await createProfile();
       const rewardId = await grant('u1', profileId);
+      // A seed that crashes at least 1 s before its end, so the test does not depend on a random seed.
+      await useSeed(rewardId, CRASH_SEED);
       await optIn(rewardId, 'u1', 'crash-bet');
-      // Pin the saved crash point to half-way so the test does not depend on the seed.
-      const row = await db('user_rewards').where({ id: rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
-      snapshot.rideMath.crashPct = 0.5;
-      await db('user_rewards').where({ id: rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
-      const { startMs, durationMs } = await rideOf(rewardId);
+      const { startMs, endMs, crashMs } = await rideOf(rewardId);
+      expect(crashMs).not.toBeNull();
 
-      expect((await expireRewards(new Date(startMs + durationMs * 0.4), 0)).total_expired).toBe(0);
-      const result = await expireRewards(new Date(startMs + durationMs * 0.6), 0);
+      expect((await expireRewards(new Date(startMs + (crashMs! - startMs) * 0.8), 0)).total_expired).toBe(0);
+      const result = await expireRewards(new Date(crashMs! + (endMs - crashMs!) / 2), 0);
       expect(result.entered_expired).toBe(1);
       expect((await userRewardRepository.findById(rewardId))?.status).toBe('EXPIRED');
     });
@@ -189,12 +198,10 @@ describe('Reward expiry job', () => {
     it('waits RIDE_EXPIRY_GRACE_SECONDS (default 900) after the ride ended before expiring it', async () => {
       const profileId = await createProfile();
       const rewardId = await grant('u1', profileId);
+      await useSeed(rewardId, END_SEED); // no crash: the ride ends at end_time
       await optIn(rewardId, 'u1', 'grace-bet');
-      const row = await db('user_rewards').where({ id: rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
-      snapshot.rideMath.crashPct = 1; // no crash: the ride ends at end_time
-      await db('user_rewards').where({ id: rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
-      const { endMs } = await rideOf(rewardId);
+      const { endMs, crashMs } = await rideOf(rewardId);
+      expect(crashMs).toBeNull();
 
       // Default grace from config (900 s).
       expect((await expireRewards(new Date(endMs + 1_000))).total_expired).toBe(0);
@@ -208,16 +215,13 @@ describe('Reward expiry job', () => {
     it('measures the grace from the crash, not from the end time', async () => {
       const profileId = await createProfile();
       const rewardId = await grant('u1', profileId);
+      await useSeed(rewardId, CRASH_SEED);
       await optIn(rewardId, 'u1', 'grace-crash-bet');
-      const row = await db('user_rewards').where({ id: rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
-      snapshot.rideMath.crashPct = 0.5;
-      await db('user_rewards').where({ id: rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
-      const { startMs, durationMs } = await rideOf(rewardId);
-      const crashMs = startMs + durationMs * 0.5;
+      const { crashMs, endMs } = await rideOf(rewardId);
+      expect(endMs - crashMs!).toBeGreaterThan(1_000);
 
-      expect((await expireRewards(new Date(crashMs + 59_000), 60)).total_expired).toBe(0);
-      expect((await expireRewards(new Date(crashMs + 61_000), 60)).entered_expired).toBe(1);
+      expect((await expireRewards(new Date(crashMs! + 59_000), 60)).total_expired).toBe(0);
+      expect((await expireRewards(new Date(crashMs! + 61_000), 60)).entered_expired).toBe(1);
     });
 
     it('never touches USED rewards or their locks', async () => {
@@ -293,22 +297,19 @@ describe('Reward expiry job', () => {
         .send({ user_id: 'u1', reward_id: rewardId, bet_id: betId });
     }
 
-    async function enteredReward(betId: string, crashPct: number) {
+    async function enteredReward(betId: string, seed: string) {
       const profileId = await createProfile();
       const rewardId = await grant('u1', profileId);
+      await useSeed(rewardId, seed);
       await optIn(rewardId, 'u1', betId);
-      const row = await db('user_rewards').where({ id: rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
-      snapshot.rideMath.crashPct = crashPct;
-      await db('user_rewards').where({ id: rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
       return { rewardId, ...(await rideOf(rewardId)) };
     }
 
     it.each([
-      ['RIDE_CRASHED', 0.5, (ride: { startMs: number; durationMs: number }) => ride.startMs + ride.durationMs * 0.7],
-      ['RIDE_ENDED', 1, (ride: { endMs: number }) => ride.endMs + 1_000],
-    ])('reports %s unchanged after the job expired the reward', async (code, crashPct, evaluateAt) => {
-      const ride = await enteredReward(`terminal-${code}`, crashPct);
+      ['RIDE_CRASHED', CRASH_SEED, (ride: { crashMs: number | null; endMs: number }) => ride.crashMs! + (ride.endMs - ride.crashMs!) / 2],
+      ['RIDE_ENDED', END_SEED, (ride: { endMs: number }) => ride.endMs + 1_000],
+    ])('reports %s unchanged after the job expired the reward', async (code, seed, evaluateAt) => {
+      const ride = await enteredReward(`terminal-${code}`, seed);
       const at = evaluateAt(ride as never);
       jest.spyOn(Date, 'now').mockReturnValue(at);
 
@@ -347,9 +348,9 @@ describe('Reward expiry job', () => {
     });
 
     it('reports REWARD_EXPIRED for another bet or while the expired ride is not over, and never locks', async () => {
-      const ride = await enteredReward('expired-live-bet', 0.5);
+      const ride = await enteredReward('expired-live-bet', CRASH_SEED);
       await db('user_rewards').where({ id: ride.rewardId }).update({ status: 'EXPIRED' });
-      jest.spyOn(Date, 'now').mockReturnValue(ride.startMs + ride.durationMs * 0.2);
+      jest.spyOn(Date, 'now').mockReturnValue(ride.startMs + (ride.crashMs! - ride.startMs) * 0.4);
 
       expect((await quote(ride.rewardId, 'other-bet')).body.reason_code).toBe('REWARD_EXPIRED');
       expect((await lock(ride.rewardId, 'other-bet')).body.code).toBe('REWARD_EXPIRED');
@@ -362,7 +363,7 @@ describe('Reward expiry job', () => {
     });
 
     it('reports REWARD_EXPIRED when an expired ride has no usable saved math', async () => {
-      const ride = await enteredReward('expired-bad-math-bet', 0.5);
+      const ride = await enteredReward('expired-bad-math-bet', CRASH_SEED);
       const row = await db('user_rewards').where({ id: ride.rewardId }).first();
       const snapshot = JSON.parse(row.ticket_snapshot);
       snapshot.rideMath = { version: 3, broken: true };

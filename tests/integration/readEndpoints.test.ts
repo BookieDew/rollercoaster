@@ -144,7 +144,7 @@ describe('Read Endpoints Integration Tests', () => {
     expect(lockRes.body.reward_id).toBe(rewardId);
     expect(lockRes.body.locked_boost_pct).toBeGreaterThan(0);
     expect(Array.isArray(lockRes.body.ride_path)).toBe(true);
-    expect(lockRes.body.maximum_model).toBe('WAVES_PRE_CRASH_SUPREMUM_V2');
+    expect(lockRes.body.maximum_model).toBe('PRE_CRASH_SUPREMUM_V4');
     expect(lockRes.body).toEqual(createdLock);
 
     // Represent a historical lock without model metadata; reading/repeating the

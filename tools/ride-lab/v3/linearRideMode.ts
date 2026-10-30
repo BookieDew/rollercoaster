@@ -1,4 +1,4 @@
-import type { RidePathPoint } from '../types/ride';
+import type { RidePathPoint } from './types';
 
 export function calculateLinearBoostPctAtElapsed(
   elapsedPct: number,

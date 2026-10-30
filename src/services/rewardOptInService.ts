@@ -1,26 +1,14 @@
 import { userRewardRepository, BetAlreadyBoundError, type OptInMoney } from '../db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
-import { rideDefinitionRepository } from '../db/repositories/rideDefinitionRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import { runInTransaction, Rollback, isUniqueViolation } from '../db/repositories/transaction';
-import {
-  deriveRideParams,
-  deriveRideDurationSeconds,
-} from '../computations/deterministicRideGenerator';
-import {
-  filterQualifyingSelections,
-  calculateCombinedOdds,
-  meetsMinSelectionCount,
-  meetsCombinedOddsThreshold,
-  computeTicketStrength,
-  generatePhaseCorrectedRide,
-} from '../computations';
 import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
 import { LEGACY_BRAND_ID } from '../types/brand';
 import { config } from '../config';
-import { createRideMathSnapshot, resolveRideMathSnapshot, resolveRideCheckpoints } from './rideMathSnapshot';
+import { buildRideMath, toRideMathProfile } from './rideMathSnapshot';
+import { describeOdds, evaluateTicket } from './ticketEvaluation';
 import { expireGrantedReward } from './rewardExpiryService';
 
 export interface ServiceResult<T> {
@@ -57,7 +45,8 @@ export interface EligibilityResult {
   reason_code: ReasonCode;
   qualifying_selection_count: number;
   total_selection_count: number;
-  combined_odds: number;
+  /** Exact decimal string when the combined odds are beyond the double range. */
+  combined_odds: number | string;
   ticket_strength: number | null;
 }
 
@@ -65,7 +54,7 @@ function buildEligibilityResponse(
   reasonCode: ReasonCode,
   totalCount: number,
   qualifyingCount: number,
-  combinedOdds: number,
+  combinedOdds: number | string,
   ticketStrength: number | null
 ): EligibilityResult {
   return {
@@ -121,54 +110,23 @@ export async function precheckEligibility(
     };
   }
 
-  const { qualifying } = filterQualifyingSelections(
-    selections,
-    profile.minSelectionOdds
-  );
-
-  const combinedOdds = calculateCombinedOdds(qualifying);
-  const tentativeTicketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
-    minSelections: profile.minSelections,
-  });
-
-  if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
-    return {
-      success: true,
-      data: buildEligibilityResponse(
-        ReasonCode.MIN_SELECTIONS_NOT_MET,
-        selections.length,
-        qualifying.length,
-        combinedOdds,
-        tentativeTicketStrength
-      ),
-    };
-  }
-
-  if (!meetsCombinedOddsThreshold(combinedOdds, profile.minCombinedOdds)) {
-    return {
-      success: true,
-      data: buildEligibilityResponse(
-        ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
-        selections.length,
-        qualifying.length,
-        combinedOdds,
-        tentativeTicketStrength
-      ),
-    };
-  }
-
-  const ticketStrength = tentativeTicketStrength;
-
+  const ticket = evaluateTicket(selections, profile);
   return {
     success: true,
-    data: buildEligibilityResponse(ReasonCode.ELIGIBLE, selections.length, qualifying.length, combinedOdds, ticketStrength),
+    data: buildEligibilityResponse(
+      ticket.reason,
+      selections.length,
+      ticket.qualifying.length,
+      ticket.combinedOddsDisplay,
+      ticket.ticketStrength
+    ),
   };
 }
 
 /**
  * Handles user opt-in to a reward after bet placement.
- * Validates the reward and bet eligibility, starts the ride,
- * and generates ride checkpoints using the deterministic generator.
+ * Validates the reward and bet eligibility (exact combined odds), starts the V4 ride and freezes
+ * its payout inputs in the reward's ticket snapshot.
  */
 export async function optIn(
   rewardId: string,
@@ -237,7 +195,7 @@ export async function optIn(
     return failure(ReasonCode.REWARD_EXPIRED, 'Reward has expired');
   }
 
-  // Get the profile to generate ride checkpoints
+  // Get the profile: its ride-math fields are frozen into the ride snapshot
   const profile = await rewardProfileRepository.findById(reward.profileVersionId);
   if (!profile) {
     return {
@@ -263,89 +221,48 @@ export async function optIn(
     money = { stakeMinor, currency, bonusCapMinor };
   }
 
-  // Validate eligibility based on ticket (bet already placed)
-  const { qualifying, disqualified } = filterQualifyingSelections(
-    selections,
-    profile.minSelectionOdds
-  );
-
-  const combinedOdds = calculateCombinedOdds(qualifying);
-
-  if (!meetsMinSelectionCount(qualifying.length, profile.minSelections)) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.MIN_SELECTIONS_NOT_MET,
-        message: `Minimum ${profile.minSelections} qualifying selections required, got ${qualifying.length}`,
-      },
-    };
+  // Validate eligibility based on ticket (bet already placed): exact combined odds.
+  const ticket = evaluateTicket(selections, profile);
+  if (ticket.reason === ReasonCode.MIN_SELECTIONS_NOT_MET) {
+    return failure(
+      ReasonCode.MIN_SELECTIONS_NOT_MET,
+      `Minimum ${profile.minSelections} qualifying selections required, got ${ticket.qualifying.length}`
+    );
+  }
+  if (ticket.reason === ReasonCode.MIN_COMBINED_ODDS_NOT_MET) {
+    return failure(
+      ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
+      `Minimum combined odds of ${profile.minCombinedOdds} required, got ${describeOdds(ticket)}`
+    );
   }
 
-  if (!meetsCombinedOddsThreshold(combinedOdds, profile.minCombinedOdds)) {
-    return {
-      success: false,
-      error: {
-        code: ReasonCode.MIN_COMBINED_ODDS_NOT_MET,
-        message: `Minimum combined odds of ${profile.minCombinedOdds} required, got ${combinedOdds.toFixed(2)}`,
-      },
-    };
-  }
-
-  const ticketStrength = computeTicketStrength(qualifying.length, combinedOdds, {
-    minSelections: profile.minSelections,
-  });
-
-  // Generate deterministic seed and ride
-  const seed = reward.seed;
-  const durationSeconds = deriveRideDurationSeconds(
-    seed,
-    config.ride.minDurationSeconds,
-    config.ride.maxDurationSeconds
-  );
-  const derived = deriveRideParams(seed, durationSeconds, config.ride.minCrashSeconds);
-  const ride = generatePhaseCorrectedRide(seed, {
-    checkpointCount: derived.checkpointCount,
-    volatility: derived.volatility,
-    minBoostPct: profile.minBoostPct,
-    maxBoostPct: profile.maxBoostPct,
-    rideMode: profile.rideMode,
-    ticketStrength,
-    durationSeconds,
-    crashPct: derived.crashPct,
-    minPeakDelaySeconds: 2,
-    qualifyingSelections: qualifying.length,
-    combinedOdds,
-    finalBoostConfig: profile,
-  });
-
-  // Start ride timing now (short duration)
+  // Build the V4 ride from the secret seed and freeze every payout input. The ride starts now.
   const now = new Date();
-  const startTime = now.toISOString();
-  const endTime = new Date(now.getTime() + durationSeconds * 1000).toISOString();
-
-  // Ride checkpoints to persist (legacy table copy; V3 JSON in the snapshot is authoritative)
-  const checkpointInputs = ride.checkpoints.map((cp) => ({
-    rewardId,
-    checkpointIndex: cp.index,
-    timeOffsetPct: cp.timeOffsetPct,
-    baseBoostValue: cp.baseBoostValue,
-  }));
+  const { math: rideMath } = buildRideMath(
+    reward.seed,
+    toRideMathProfile(profile),
+    ticket,
+    config.ride,
+    now.getTime()
+  );
+  const { startTime, endTime } = rideMath;
 
   const optedInAt = now.toISOString();
   const ticketSnapshot = {
-    rideMath: createRideMathSnapshot(profile, startTime, endTime, derived, 3, ride),
+    rideMath,
     selections,
-    qualifyingSelections: qualifying,
-    disqualifiedSelections: disqualified,
-    combinedOdds,
-    ticketStrength,
+    qualifyingSelections: ticket.qualifying,
+    disqualifiedSelections: ticket.disqualified,
+    combinedOdds: ticket.combinedOddsDisplay,
+    combinedOddsExact: ticket.combinedOddsExact,
+    ticketStrength: ticket.ticketStrength,
     minSelectionOdds: profile.minSelectionOdds,
     minSelections: profile.minSelections,
     minCombinedOdds: profile.minCombinedOdds,
   };
 
   try {
-    // Claim (GRANTED -> ENTERED), bet binding, checkpoints and audit are atomic.
+    // Claim (GRANTED -> ENTERED), bet binding with the ride snapshot, and audit are atomic.
     return await runInTransaction<ServiceResult<OptInResult>>(async (tx) => {
       const claimed = await userRewardRepository.updateStatus(rewardId, 'ENTERED', optedInAt, {
         tx,
@@ -368,8 +285,7 @@ export async function optIn(
         throw new Rollback(failure(ReasonCode.INTERNAL_ERROR, 'Failed to start ride'));
       }
 
-      await rideDefinitionRepository.createMany(checkpointInputs, tx);
-
+      // The audit row never carries the seed: only its SHA-256 commitment.
       await auditLogRepository.append({
         entityType: 'user_reward',
         entityId: rewardId,
@@ -382,16 +298,12 @@ export async function optIn(
           currency: money?.currency,
           bonusCapMinor: money?.bonusCapMinor,
           optedInAt,
-          checkpointCount: ride.checkpoints.length,
-          volatility: derived.volatility,
           rideMode: profile.rideMode,
-          crashPct: derived.crashPct,
-          seed,
-          durationSeconds,
-          combinedOdds,
-          ticketStrength,
-          mathSnapshotVersion: 3,
-          phaseDiagnostics: ride.phaseDiagnostics,
+          mathSnapshotVersion: rideMath.version,
+          seedCommitment: rideMath.seedCommitment,
+          durationSeconds: rideMath.rideDurationSeconds,
+          combinedOdds: ticket.combinedOddsExact,
+          ticketStrength: ticket.ticketStrength,
         },
       }, tx);
 
@@ -423,21 +335,7 @@ function failure<T>(code: ReasonCode, message: string): ServiceResult<T> {
   return { success: false, error: { code, message } };
 }
 
-/**
- * Gets the ride checkpoints for a reward.
- */
-export async function getRideCheckpoints(rewardId: string) {
-  const reward = await userRewardRepository.findById(rewardId);
-  if (reward?.ticketSnapshot?.rideMath != null) {
-    const math = await resolveRideMathSnapshot(reward!);
-    if (!math) throw new Error('Invalid saved ride math snapshot');
-    return resolveRideCheckpoints(rewardId, math);
-  }
-  return rideDefinitionRepository.findByRewardId(rewardId);
-}
-
 export const rewardOptInService = {
   optIn,
-  getRideCheckpoints,
   precheckEligibility,
 };

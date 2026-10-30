@@ -2,14 +2,14 @@ import request from 'supertest';
 import { app } from '../../src/index';
 import db from '../../src/db/connection';
 import { ReasonCode } from '../../src/types/reasonCodes';
-import { generateSeed } from '../../src/computations';
 import { boostQuoteService } from '../../src/services/boostQuoteService';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
-import { rideDefinitionRepository } from '../../src/db/repositories/rideDefinitionRepository';
 import { rewardProfileRepository } from '../../src/db/repositories/rewardProfileRepository';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
 import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
-import type { RideMathSnapshot } from '../../src/services/rideMathSnapshot';
+import type { RideMathSnapshotV4 as RideMathSnapshot } from '../../src/types/ride';
+import { seedCommitment } from '../../src/computations/v4';
+import { legacyPublicIdSeed, liveMomentMs } from '../helpers/v4Rides';
 
 const API_KEY = 'test-api-key';
 const SELECTIONS = [
@@ -100,8 +100,7 @@ function holdUntilAllArrive<T extends object, K extends keyof T>(target: T, meth
 
 /** Freezes the evaluation clock at a fraction of the pre-crash window. */
 function freezeClockAtLivePoint(math: RideMathSnapshot): number {
-  const startMs = Date.parse(math.startTime);
-  const liveMs = startMs + Math.floor(math.rideDurationSeconds * math.crashPct * 1000 * 0.4);
+  const liveMs = liveMomentMs(math);
   jest.spyOn(Date, 'now').mockReturnValue(liveMs);
   return liveMs;
 }
@@ -177,6 +176,57 @@ describe('Phase 0 fairness and money-path integrity', () => {
       }
     );
 
+    it.each<RideMode>(['WAVES', 'LINEAR'])(
+      '%s: opt-in and live quote responses never carry the path, ride maximum, crash time or phase, seed or commitment',
+      async (mode) => {
+        const profileId = await createProfile(mode);
+        const rewardId = (await grant('leak-user', profileId)).body.id;
+        const optInRes = await optIn(rewardId, 'leak-user', `leak-bet-${mode}`);
+        expect(optInRes.status).toBe(200);
+        const { seed } = await rewardRow(rewardId);
+        const math = await rideMath(rewardId);
+        expect(math.version).toBe(4);
+        expect(math.seedCommitment).toBe(seedCommitment(seed));
+
+        const forbiddenKeys = /"(ride_path|path|ride_maximum|ride_maximum_pct|rideMaximum|crash_at_seconds|crashAtSeconds|crash_phase|crashPhase|crash_bucket|seed|seed_commitment|seedCommitment|checkpoints)"/;
+        const assertNoFuture = (body: unknown) => {
+          const text = JSON.stringify(body);
+          expect(text).not.toMatch(forbiddenKeys);
+          expect(text).not.toContain(seed);
+          expect(text).not.toContain(math.seedCommitment);
+        };
+        assertNoFuture(optInRes.body);
+        expect(optInRes.body.end_time).toBeNull();
+
+        // Quotes at several live moments, also the opt-in precheck of a second reward.
+        const terminal = math.crashAtSeconds ?? math.rideDurationSeconds;
+        const startMs = Date.parse(math.startTime);
+        for (const fraction of [0, 0.1, 0.5, 0.9]) {
+          jest.spyOn(Date, 'now').mockReturnValue(startMs + Math.floor(terminal * 1000 * fraction));
+          const live = await quote(rewardId, 'leak-user', `leak-bet-${mode}`);
+          expect(live.status).toBe(200);
+          expect(live.body.eligible).toBe(true);
+          expect(live.body.theoretical_max_boost_pct).toBeNull();
+          expect(live.body.ride_end_at_offset_seconds).toBeNull();
+          expect(live.body.ride_crash_at_offset_seconds).toBeNull();
+          expect(live.body.ride_path).toBeUndefined();
+          for (const value of [math.rideMaximumPct, math.preCrashMaximumPct]) {
+            if (value !== live.body.current_boost_pct) expect(JSON.stringify(live.body)).not.toContain(`:${value},`);
+          }
+          assertNoFuture(live.body);
+        }
+        jest.restoreAllMocks();
+
+        const other = (await grant('leak-user', profileId)).body.id;
+        const precheck = await request(app)
+          .post(`/api/rewards/${other}/eligibility`)
+          .set('X-API-Key', API_KEY)
+          .send({ user_id: 'leak-user', ticket: { selections: SELECTIONS } });
+        expect(precheck.status).toBe(200);
+        assertNoFuture(precheck.body);
+      }
+    );
+
     it('returns no end_time and no seed while a reward is GRANTED or ENTERED', async () => {
       const profileId = await createProfile();
       const grantRes = await grant('timing-user', profileId);
@@ -244,14 +294,17 @@ describe('Phase 0 fairness and money-path integrity', () => {
       expect(rows).toHaveLength(2);
       for (const row of rows) {
         expect(row.seed).toMatch(/^[0-9a-f]{64}$/);
-        expect(row.seed).not.toBe(generateSeed(row.id, row.user_id, row.profile_version_id));
+        expect(row.seed).not.toBe(legacyPublicIdSeed(row.id, row.user_id, row.profile_version_id));
       }
       expect(rows[0].seed).not.toBe(rows[1].seed);
 
-      // Grant is a single insert: the stored end time is derived from the stored seed.
+      // Grant is a single insert audited with the seed's commitment, never the seed.
       const audit = await db('audit_logs').where({ entity_id: first, action: 'GRANT' });
       expect(audit).toHaveLength(1);
-      expect(JSON.parse(audit[0].payload).seed).toBe(rows.find((r) => r.id === first).seed);
+      const firstSeed = rows.find((r) => r.id === first).seed;
+      expect(JSON.parse(audit[0].payload).seedCommitment).toBe(seedCommitment(firstSeed));
+      expect(audit[0].payload).not.toContain(firstSeed);
+      expect(JSON.parse(audit[0].payload)).not.toHaveProperty('seed');
     });
   });
 
@@ -312,8 +365,9 @@ describe('Phase 0 fairness and money-path integrity', () => {
       expect(statuses).toEqual([200, 409]);
       expect(responses.find((r) => r.status === 409)!.body.code).toBe(ReasonCode.ALREADY_OPTED_IN);
 
-      const math = await rideMath(rewardId);
-      expect(await db('ride_definitions').where({ reward_id: rewardId })).toHaveLength(math.checkpoints!.length);
+      expect((await rideMath(rewardId)).version).toBe(4);
+      // V4 rides keep no checkpoint rows: the frozen snapshot and the seed rebuild the ride.
+      expect(await db('ride_definitions').where({ reward_id: rewardId })).toHaveLength(0);
       expect(await db('audit_logs').where({ entity_id: rewardId, action: 'OPT_IN' })).toHaveLength(1);
     });
 
@@ -336,7 +390,11 @@ describe('Phase 0 fairness and money-path integrity', () => {
       const profileId = await createProfile();
       const rewardId = (await grant('rollback-user', profileId)).body.id;
 
-      jest.spyOn(rideDefinitionRepository, 'createMany').mockRejectedValueOnce(new Error('injected failure'));
+      const realAppend = auditLogRepository.append;
+      jest.spyOn(auditLogRepository, 'append').mockImplementation(async (input, tx) => {
+        if (input.action === 'OPT_IN') throw new Error('injected failure');
+        return realAppend(input, tx);
+      });
       const failed = await optIn(rewardId, 'rollback-user', 'rollback-bet');
       expect(failed.status).toBe(500);
       expect(failed.body.code).toBe(ReasonCode.INTERNAL_ERROR);
@@ -345,7 +403,9 @@ describe('Phase 0 fairness and money-path integrity', () => {
       expect(row.status).toBe('GRANTED');
       expect(row.bet_id).toBeNull();
       expect(row.opted_in_at).toBeNull();
+      expect(row.ticket_snapshot).toBeNull();
 
+      jest.mocked(auditLogRepository.append).mockRestore();
       expect((await optIn(rewardId, 'rollback-user', 'rollback-bet')).status).toBe(200);
     });
   });
