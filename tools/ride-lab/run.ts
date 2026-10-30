@@ -16,10 +16,18 @@ function parseArgs(argv: string[]) {
   return args;
 }
 
-function loadAdapter(name: string): EngineAdapter {
+function loadAdapter(name: string, linearPace?: string): EngineAdapter {
   if (!/^[a-z0-9]+$/i.test(name)) throw new Error(`bad engine name: ${name}`);
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return require(`./${name}Adapter`).adapter as EngineAdapter;
+  const mod = require(`./${name}Adapter`) as {
+    adapter: EngineAdapter;
+    createAdapter?: (opts: { linearPace?: string }) => EngineAdapter;
+  };
+  if (linearPace !== undefined) {
+    if (!mod.createAdapter) throw new Error(`engine ${name} has no LINEAR pace option`);
+    return mod.createAdapter({ linearPace });
+  }
+  return mod.adapter;
 }
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
@@ -32,7 +40,9 @@ function main() {
   const seedBase = args['seed-base'] ?? 'ride-lab-v1';
   const stepMs = Number(args['step-ms'] ?? 50);
   const out = resolve(args.out ?? `docs/ai/audits/ride-lab-${engine}`);
-  const adapter = loadAdapter(engine);
+  const linearPace = args['linear-pace']?.toUpperCase();
+  const adapter = loadAdapter(engine, linearPace);
+  const engineLabel = linearPace ? `${engine} (LINEAR pace ${linearPace})` : engine;
   const configs = buildConfigs();
   mkdirSync(out, { recursive: true });
 
@@ -54,8 +64,8 @@ function main() {
   }
 
   const generatedAt = new Date().toISOString();
-  writeFileSync(join(out, 'report.md'), renderReport({ engine, n, seedBase, stepMs, results, generatedAt }));
-  writeFileSync(join(out, 'results.json'), JSON.stringify({ engine, n, seedBase, stepMs, generatedAt, results }, null, 1));
+  writeFileSync(join(out, 'report.md'), renderReport({ engine: engineLabel, n, seedBase, stepMs, results, generatedAt }));
+  writeFileSync(join(out, 'results.json'), JSON.stringify({ engine, ...(linearPace ? { linearPace } : {}), n, seedBase, stepMs, generatedAt, results: results.map(({ runtimeSeconds: _wallClock, ...stable }) => stable) }, null, 1));
 
   const gallery: GalleryRide[] = [];
   for (const cfg of configs) {
@@ -65,7 +75,7 @@ function main() {
       gallery.push({ seed, config: cfg, ride: adapter.sample(seed, cfg) });
     }
   }
-  writeFileSync(join(out, 'gallery.html'), renderGallery(engine, gallery));
+  writeFileSync(join(out, 'gallery.html'), renderGallery(engineLabel, gallery));
 
   if (golden > 0) writeFileSync(join(out, 'golden-corpus.json'), JSON.stringify(buildGolden(adapter, configs, seedBase, golden)));
   console.log(`wrote ${out}`);
