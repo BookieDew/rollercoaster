@@ -92,7 +92,7 @@ async function auditActions(knex: KnexType, action: string) {
   return knex('audit_logs').where({ entity_type: 'user_reward', action }).orderBy('entity_id');
 }
 
-describe('Phase 1a migrations 012-015', () => {
+describe('Phase 1a migrations 012-016', () => {
   let knex: KnexType;
 
   beforeEach(() => {
@@ -135,6 +135,7 @@ describe('Phase 1a migrations 012-015', () => {
         '013_rename_duplicate_bet_bindings.ts',
         '014_add_user_rewards_brand_bet_unique_index.ts',
         '015_create_bet_settlements.ts',
+        '016_close_inflight_rides_for_v4.ts',
       ]);
 
       expect((await knex('user_rewards').count('* as c').first())!.c).toBe(rewardCount);
@@ -241,7 +242,7 @@ describe('Phase 1a migrations 012-015', () => {
       await knex.migrate.latest();
 
       const [, rolledBack] = await knex.migrate.rollback();
-      expect(rolledBack).toHaveLength(4);
+      expect(rolledBack).toHaveLength(5);
       expect(await knex.schema.hasTable('settlement_records')).toBe(true);
       expect(await knex.schema.hasTable('bet_settlements')).toBe(false);
       expect(await betIds(knex)).toEqual(original);
@@ -265,7 +266,7 @@ describe('Phase 1a migrations 012-015', () => {
 
   it('migrates a fresh empty database without touching audit_logs', async () => {
     const [, applied] = await knex.migrate.latest();
-    expect(applied).toHaveLength(15);
+    expect(applied).toHaveLength(16);
     expect(await knex('audit_logs')).toHaveLength(0);
     expect(await knex.schema.hasColumn('user_rewards', 'replaces_reward_id')).toBe(true);
     expect(await knex.schema.hasColumn('reward_profile_versions', 'reward_validity_seconds')).toBe(true);
@@ -323,7 +324,7 @@ describe('Phase 1a migrations 012-015', () => {
       // Once the legacy rows are archived and removed, the migration applies.
       await knex('settlement_records').del();
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts']);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts']);
       expect(await knex.schema.hasTable('settlement_records')).toBe(false);
     });
 
@@ -339,6 +340,7 @@ describe('Phase 1a migrations 012-015', () => {
       const up = await lockIndexNames();
       expect(up).not.toContain('bet_boost_locks_brand_id_bet_id_index');
       expect(up).toContain('bet_boost_locks_brand_id_bet_id_unique');
+      await knex.migrate.down();
       await knex.migrate.down();
       const down = await lockIndexNames();
       expect(down).toContain('bet_boost_locks_brand_id_bet_id_index');
@@ -384,6 +386,7 @@ describe('Phase 1a migrations 012-015', () => {
       await seedLock('55555555-5555-4555-8555-555555555555', 'brand-a', 'shared-bet', R.unique);
       await seedLock('66666666-6666-4666-8666-666666666666', 'brand-b', 'shared-bet', R.taken);
 
+      await knex.migrate.down(); // 016 (nothing to restore here)
       await expect(knex.migrate.down()).rejects.toThrow(/locked in more than one brand/);
       expect(await knex.schema.hasTable('bet_settlements')).toBe(true);
 
@@ -411,7 +414,7 @@ describe('Phase 1a migrations 012-015', () => {
       expect(isUniqueViolation(error)).toBe(true);
 
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts']);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts']);
     });
   });
 });
