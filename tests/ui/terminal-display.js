@@ -27,7 +27,7 @@ async (page) => {
     if (url.endsWith('/api/boost/lock')) {
       attempts++;
       if (attempts === 1) return route.abort('failed');
-      const data = {...replay,...route.request().postDataJSON(),lock_id:'lock',locked_boost_pct:.123456,ride_stop_at_offset_seconds:2.1,theoretical_max_boost_pct:.45,maximum_model:'WAVES_PRE_CRASH_SUPREMUM_V2'};
+      const data = {...replay,...route.request().postDataJSON(),lock_id:'lock',locked_boost_pct:.123456,ride_stop_at_offset_seconds:2.1,theoretical_max_boost_pct:.45,maximum_model:'PRE_CRASH_SUPREMUM_V4'};
       if (attempts === 2) data.reward_id = 'different-reward';
       if (legacy) delete data.ride_end_at_offset_seconds;
       return reply(data);

@@ -7,17 +7,11 @@
 > [API Examples](docs/api-examples.md), actual `src/` types/services/computations,
 > migrations, and current tests for delivered behavior.
 >
-> Current model work includes versioned opt-in math snapshots, authoritative live
-> sample timing/path values, simulation eligibility/parity, and new-ride LINEAR
-> alignment to the true existing WAVES pre-crash maximum. Legacy rides/locks keep
-> their model. The maximum is not guaranteed lockable. Current local V3 adds a
-> feasible WAVES suffix correction with conditional 50/20/30 phase targets and
-> explicit early/flat/no-crash exceptions. It preserves timing, bounds, true
-> maxima, and V2 LINEAR behavior, but changes WAVES stopping opportunities.
-> V3 checkpoint JSON and interpolation metadata are authoritative; old versions
-> retain their saved model. The demo progressively draws observed samples.
-> Curve/browser acceptance and release remain separate; this checklist promises
-> neither RTP nor a universal wave peak count. Validate with `npm run build`
+> Current model work: ride math is V4 only (seeded, keyed RNG; crash-window timing;
+> LINEAR at MEDIUM pace). Earlier versions were removed and in-flight old rides were
+> closed. The maximum is not guaranteed lockable. The demo progressively draws
+> observed samples. Curve/browser acceptance and release remain separate; this
+> checklist promises neither RTP nor a universal wave peak count. Validate with `npm run build`
 > and `npm run test:coverage`.
 
 ## Overview

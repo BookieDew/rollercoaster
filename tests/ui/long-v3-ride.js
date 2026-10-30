@@ -53,7 +53,7 @@ async (page) => {
     assert(['RIDE_CRASHED', 'RIDE_ENDED'].includes(terminal.raw.reason_code), 'Unexpected real terminal reason');
     assert(terminal.current === '0.00%' && terminal.points.at(-1).boost === 0, 'Terminal zero not plotted');
     assert(Array.isArray(terminal.raw.ride_path), 'Terminal raw path removed');
-    assert(terminal.raw.maximum_model === 'WAVES_PRE_CRASH_SUPREMUM_V2', 'Maximum model label changed with phase version');
+    assert(terminal.raw.maximum_model === 'PRE_CRASH_SUPREMUM_V4', 'Maximum model label is not the V4 label');
     assert(terminal.revealed && terminal.revealed.points.length === terminal.raw.ride_path.length, 'Full terminal samples not revealed');
     assert(terminal.terminalMarkerSeconds === terminal.points.at(-1).seconds, 'Terminal marker changed the observation time');
     assert(terminal.axisSeconds === Math.max(terminal.revealed.duration, terminal.points.at(-1).seconds), 'Late observation is outside the time axis');

@@ -53,8 +53,8 @@ async (page) => {
       width: document.getElementById('rideChart').viewBox.baseVal.width,
       height: document.getElementById('rideChart').viewBox.baseVal.height,
     }));
-    assert(final.raw.maximum_model === 'WAVES_PRE_CRASH_SUPREMUM_V2', 'New lock missing V2 discriminator');
-    assert(await page.locator('#rideMaximumLabel').textContent() === 'Ride maximum', 'V2 final label is wrong');
+    assert(final.raw.maximum_model === 'PRE_CRASH_SUPREMUM_V4', 'New lock missing V4 discriminator');
+    assert(await page.locator('#rideMaximumLabel').textContent() === 'Ride maximum', 'V4 final label is wrong');
     assert(final.label === 'Locked boost', 'Did not lock before minimum crash');
     assert(final.boost === final.raw.locked_boost_pct, 'Lock marker boost mismatch');
     assert(final.seconds === final.raw.ride_stop_at_offset_seconds, 'Lock marker time mismatch');

@@ -51,8 +51,8 @@ requires `?brand_id=`.
 
 ## Status
 
-**Pre-production.** Not yet for real-money use. Planned work includes changes to
-the ride math, so ride outputs and some response fields may change. See [Known limitations](#known-limitations).
+**Pre-production.** Not yet for real-money use. Ride math is V4 only; rides
+started under older math were closed by migration 016. See [Known limitations](#known-limitations).
 
 ## Requirements
 
@@ -131,7 +131,7 @@ All settings are environment variables (a `.env` file is read outside tests).
 | `HMAC_REPLAY_CACHE_SIZE` | `10000` | Positive integer; signatures remembered for replay protection |
 | `RIDE_MIN_DURATION_SECONDS` | `2` | Greater than 0 and ≤ `RIDE_MAX_DURATION_SECONDS` |
 | `RIDE_MAX_DURATION_SECONDS` | `15` | |
-| `RIDE_MIN_CRASH_SECONDS` | `2` | 0 to `RIDE_MAX_DURATION_SECONDS` |
+| `RIDE_MIN_CRASH_SECONDS` | `2` | At least 0.4, at most `RIDE_MIN_DURATION_SECONDS`, and below `RIDE_MAX_DURATION_SECONDS` |
 | `DEMO_UI_ENABLED` | `true`, but `false` in production | Serves the demo at `/demo` |
 | `REWARD_EXPIRY_INTERVAL_SECONDS` | `300` | Integer ≥ 0 (at most 2147483); seconds between in-process reward expiry runs, `0` disables. Runs only while the server is listening, never in test. `POST /api/admin/rewards/expire` runs it on demand |
 | `RIDE_EXPIRY_GRACE_SECONDS` | `900` | Integer 0 to 31536000; an unlocked ride must have been over (crashed or ended) this long before the expiry job marks its reward `EXPIRED`. Until then quote and lock report the ride's own `RIDE_CRASHED` / `RIDE_ENDED` |

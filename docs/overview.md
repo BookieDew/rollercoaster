@@ -39,7 +39,7 @@ players are all scoped to a brand, so two brands never see or affect each other'
   - `effective_min_floor_rate` (default 0.35)
 - Profile maximum, ticket-adjusted cap, per-ride maximum, observed sample peak, and locked boost are distinct. Meeting max-boost thresholds opens cap access; it does not guarantee that a ride reaches the cap.
 - New rides freeze their profile, mode, and timing settings at opt-in. Later profile edits do not change an already-started new ride or a locked payout.
-- The maximum model keeps the true pre-crash WAVES maximum introduced in v2; LINEAR uses that same maximum. Unversioned/v1 rides retain their older checkpoint reference, which can understate values between checkpoints. Saved v2 rides, existing locks, and settlements also retain their original behavior.
+- The ride maximum is the exact highest value the ride reaches before it crashes or ends; LINEAR climbs toward that same maximum. Existing locks and settlements keep their stored values.
 - Active quotes provide current boost and authoritative elapsed sample time, without a future path or crash/end schedule. Completed/locked responses also provide sampled paths and timing offsets.
 - The local demo progressively draws received authoritative boost samples while the ride runs, then freezes the exact stop/terminal result. It retains raw JSON and final outcomes; its chart does not forecast the unobserved path.
 
@@ -90,27 +90,21 @@ Operators can configure:
   - maximum bonus per currency
   - token validity
 
-The current local implementation uses a v3 phase correction for feasible new WAVES
-rides. It targets UP/PEAK/DOWN at 50/20/30 only when enough time and effective boost
-range remain. The last part of the ride then rises, stays near its top, or falls in
-the actual payable boost. Very early, flat/rounding-degenerate, and no-crash rides
-remain unchanged and are classified separately. These targets are not a guarantee
-of exact percentages in every finite sample or of what every client will observe.
-
-The correction preserves each baseline ride's true maximum, floor/cap, duration,
-and crash/no-crash choice, but changes when boosts are available in the final
-bounded suffix. That changes WAVES stopping opportunities and potential payouts;
-maximum preservation does not imply payout neutrality. LINEAR is unchanged from
-its v2 behavior. Historical rides keep their saved model; historical phase labels
-still describe checkpoint shaping rather than guaranteed effective crash direction.
-This describes local code, not a production release or an RTP/payout guarantee.
-Curve aesthetics and final acceptance remain separate review items.
+The ride math is V4 only. Each ride is built from a secret seed through keyed
+random streams, so it is reproducible for dispute handling but unpredictable to
+players. A ride ends without crashing 8% of the time; otherwise it crashes in a
+window after the minimum crash time (weighted early/mid/late). WAVES is a
+multi-peak ride. LINEAR climbs at a MEDIUM pace (9 seconds to the top of the
+band) toward this ride's maximum. These are random draws per ride, not guaranteed
+proportions in every finite sample. Rides that were in flight under older math
+were closed at the V4 upgrade. This describes local code, not a production
+release or an RTP/payout guarantee.
 
 ## Risk controls and safeguards
 - Bonus applies only to winning bets; bettors never lose extra stake through this feature.
 - Single-use token behavior prevents repeat claiming of the same reward.
 - Lock and settlement are idempotent for safe sportsbook integration: an identical retry returns the original result, while a conflicting one (another reward or user for the same bet, or a different settlement result) is rejected rather than silently accepted; real corrections go through an explicit, audited resettlement. One bet can start only one ride.
-- While a ride is live, players see no countdown, ride length or ride maximum; those are revealed only after the ride ends or the boost is locked. Ride seeds are random and never exposed.
+- While a ride is live, players see no countdown, ride length or ride maximum; those are revealed only after the ride ends or the boost is locked. Ride seeds are random and never exposed; audit records hold only a commitment (hash) of the seed.
 - Deterministic seeded ride generation supports full replay and dispute handling.
 - HMAC authentication is supported for monetary endpoints.
 

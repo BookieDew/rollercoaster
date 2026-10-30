@@ -22,25 +22,20 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 8) Lost / cashed-out / all-push bets pay 0; a cancelled bet returns the token; corrections use `POST /api/settlement/resettle`. Crash/end prevents a new lock but cannot alter an existing lock
 
 ## Key behaviors
-- Ride is deterministic per reward: the seed is 32 random bytes (hex) generated at grant and stored; saved seed, inputs, and checkpoints support replay. It is not derivable from public IDs and is never returned by the API. (`generateSeed` remains in the generator but is no longer used for rewards.)
+- Ride is deterministic per reward: the seed is 32 random bytes (hex) generated at grant and stored; the saved seed plus the frozen opt-in snapshot rebuild it exactly. It is not derivable from public IDs and is never returned by the API; audit rows hold only `seedCommitment` (SHA-256 of the seed bytes).
 - Ride duration is short and random: `2-15s` (internal config).
-- Default minimum crash setting is `2s`. The existing rounded crash fraction can produce a slightly earlier boundary for exact-minimum/short durations (for example, `2 * 0.9999 = 1.9998s`); this edge is characterized, not repaired.
-- Crash timing uses weighted time buckets, renormalized when the configured minimum makes a bucket infeasible:
-  - EARLY: `10%`
-  - MID: `65%`
-  - LATE: `25%`
-- New v3 WAVES uses a domain-separated phase draw with UP/PEAK/DOWN targets 50/20/30 only for feasible repaired rides. Early/timing-constrained, flat/rounding-degenerate, and no-crash rides keep their baseline trajectory and separate diagnostic status. Historical generator phase labels describe checkpoint shaping, not guaranteed effective near-crash direction.
+- Default minimum crash setting is `2s` (config requires 0.4 <= min crash <= min duration, and < max duration, so every ride length can crash).
+- V4 outcome: 8% of rides do not crash. Otherwise the crash time falls in the window after the minimum crash time, in a weighted bucket (EARLY `10%`, MID `65%`, LATE `25%`) with a crash phase (UP `50%`, PEAK `20%`, DOWN `30%`). Draws come from keyed (HMAC) streams of the seed, so bucket, phase and duration are independent.
 - Active boost quotes return no countdown or future path/schedule, and withhold `theoretical_max_boost_pct` (null) while the ride is live; terminal quotes and locks keep it. Reward/opt-in responses return `end_time: null` until the reward is `USED` or `EXPIRED`.
 - Grant, opt-in, lock and settlement each write atomically (`runInTransaction` in `src/db/repositories/transaction.ts`; the transaction starts lazily on the first scoped query). Opt-in claims `GRANTED` → `ENTERED` and lock `ENTERED` → `USED` with conditional updates.
 - One bet binds to one reward **per brand**: `(brand_id, bet_id)` is unique (409 `BET_ALREADY_BOUND`; the opt-in transaction checks it and the unique index `user_rewards_brand_id_bet_id_unique` backs it, so a race that reaches the index is also 409, never 500); lock replay requires the same reward and owner (else 409 `BET_ALREADY_LOCKED`); locks are unique per `(brand_id, bet_id)` (`bet_boost_locks_brand_id_bet_id_unique`); a conflicting settlement replay is 409 `BET_ALREADY_SETTLED`.
 - Ticket strength weighting is `75%` qualifying selection count and `25%` combined odds.
 - Effective minimum boost can rise with ticket quality when max-access targets are configured (`effective_min_floor_rate`, default `0.35`). The profile max-access weights are separate from ticket-strength weights.
-- Generation uses a two-second minimum peak-delay shaping parameter where feasible; this is not a guarantee that the final clamped payout has no earlier plateau.
 - Single-use reward: lock consumes the token.
 - Optional max-boost thresholds: `max_boost_min_selections`, `max_boost_min_combined_odds`.
 - Responses distinguish `RIDE_CRASHED` vs `RIDE_ENDED`.
 - Ride modes are profile-configurable: `WAVES` or `LINEAR`.
-- Ride path is returned for lock responses and for crashed/ended quote responses.
+- Ride path (60 samples) is returned for lock responses and for crashed/ended quote responses.
 - Selections can be excluded via `eligible: false` (optional `ineligible_reason`).
 - SGP model uses explicit selection metadata:
   - `selection_type`: `STANDARD | SGP_COMPOSITE | SGP_LEG`
@@ -68,75 +63,45 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 
 ## Authoritative math and response semantics
 
-New opt-ins save `ticketSnapshot.rideMath.version = 3`: resolved profile/mode,
-start/end time, duration, checkpoint count, volatility, crash fraction, peak-delay
-parameter, maximum model, phase diagnostics, and authoritative checkpoint doubles.
-`phaseModel` is `FEASIBLE_WAVES_PHASE_V3`; the maximum model remains the separately
-versioned `WAVES_PRE_CRASH_SUPREMUM_V2`.
+New opt-ins save `ticketSnapshot.rideMath.version = 4` (`mathVersion: 'V4'`): resolved profile/mode, start/end time,
+duration bounds, qualifying selection count, exact combined odds (decimal string), ticket strength, effective min/max,
+and the ride parameters (duration, outcome, crash time, bucket, phase, linear pace, payout band, ride maximum,
+pre-crash maximum) plus the seed commitment. Each quote or lock rebuilds the ride from the stored seed with
+`createV4Ride` and refuses it (422 `INVALID_CONFIGURATION`) if any value differs from the snapshot, so a damaged
+snapshot fails closed instead of switching to mutable profile data. V4 writes no `ride_definitions` rows.
 
-V3 consumers use the frozen JSON checkpoints, not the legacy table's decimal(10,6)
-copy. Same-time raw checkpoint pairs preserve effective continuity at clamp
-transitions. An inserted point's optional `incomingSegmentEnd` preserves the
-original incoming interpolation arithmetic, including round6 boundaries; retain
-it during copying/replay. Unknown snapshot versions and malformed v3 checkpoint
-metadata fail closed instead of switching to mutable profile/table data.
-Version 1/2 snapshots retain their saved profile/timing and original table-backed
-curves; rides without a math snapshot use the explicit legacy fallback. Existing
-locks and settlements are never recalculated from a newer profile/model.
+Rides that were in flight under older math were closed by migration 016 (reward `EXPIRED`, one audit row each); locks
+and settlements stored earlier keep their stored values and label.
 
-- `WAVES_PRE_CRASH_SUPREMUM_V2`: maximum before the open crash/end boundary, after the authoritative payout transform. V2 includes the left boundary limit as well as preceding checkpoints. V3 preserves that baseline true maximum while changing eligible WAVES suffixes; the maximum calculation accounts for both sides of paired raw transitions.
-- `LEGACY_CHECKPOINT_MAX_V1`: historical checkpoint-only reference. Actual WAVES values between checkpoints can exceed this reported reference.
-- LINEAR rises from its effective floor toward the v2 same-seed WAVES maximum. The v2 endpoint correction increased LINEAR payouts on affected seeds; v3 leaves those LINEAR values unchanged. Unversioned/v1 LINEAR keeps its older checkpoint reference. At crash/end the payable value is zero in both modes.
+- WAVES is a multi-peak ride. LINEAR climbs from its effective floor toward this ride's maximum at the MEDIUM pace
+  (`LINEAR_PACE` in `rideMathSnapshot.ts`; 9 seconds to the top of the band) and stops at that maximum. At crash/end the
+  payable value is zero in both modes.
+- `PRE_CRASH_SUPREMUM_V4` is the `maximum_model`: the exact highest value before the open crash/end boundary, computed
+  from the ride's knots without sampling. It is `theoretical_max_boost_pct` once the ride is over, and is null in live quotes.
+- Combined odds are an exact BigInt product; `combined_odds` and `qualifying_odds` are numbers, or exact decimal strings
+  when beyond the double range.
 - `effective_max_boost_pct` is the ticket-adjusted cap; `theoretical_max_boost_pct` is model-dependent and is not guaranteed attainable at a finite server sample. Neither equals a guaranteed payout or the sampled/observed chart peak.
-- `maximum_model` distinguishes these models on eligible/terminal quote, POST lock, and GET lock responses. Existing locks without stored model metadata omit it.
+- `maximum_model` appears on eligible/terminal quote, POST lock, and GET lock responses. Locks stored before V4 keep their stored label, or omit it if none was stored.
 - `ride_elapsed_seconds` gives the authoritative quote sampling offset from ride start, with millisecond precision. Evaluation and terminal status use the same instant. It is not normalized progress or time remaining; terminal samples may be later than crash/end.
 - `ride_path` has 60 samples after lock or terminal quote. Each `baseBoostValue` is the authoritative effective boost at that `timePct`, despite its historical name; crash/end samples are zero. LINEAR coordinates retain full sample precision. Successful locks report the exact `locked_boost_pct` and `ride_stop_at_offset_seconds` independently of that sampled path.
 
-Simulation uses the current v3 phase model and v2 maximum model. Supplied tickets pass the same
+Simulation always uses V4. Supplied tickets pass the same
 selection/combined-odds gates as live rides; ineligible simulations still return
 HTTP 200 with `eligible: false`, a reason code, and null `final_boost_pct` for every
-sample. No-ticket calls are explicitly `EXPLORATORY` with null eligibility/reason.
-Curve fields retain four-decimal serialization (`serialization_decimals: 4`);
-resolved min/max overrides must satisfy min <= max. Operator responses additionally
-include `math_snapshot_version: 3`, `phase_diagnostics`, and optional
-`checkpoints[].incoming_segment_end` for exact replay of inserted boundaries.
-Active player responses do not expose phase assignments, future phase timing, or
-these raw checkpoint diagnostics.
-
-## V3 phase behavior and limits
-
-For WAVES, keep the original seed-derived duration, crash fraction/no-crash choice,
-scorer, eligibility, effective floor/cap, and true maximum. Let M be that maximum
-and L = max(effective floor, finalBoost(profile minimum)). L is a reachable shaping
-reference, not a replacement floor. No-crash rides stay unchanged. If M-L <=
-0.00002, classify `FLAT_OR_ROUNDING_DEGENERATE`; if fewer than 600ms remain after
-the allowed suffix start, classify `TIMING_CONSTRAINED`.
-
-A repaired suffix begins no earlier than two seconds and is at most 800ms long.
-It uses the final original segment when that segment has enough room, otherwise
-extends into the preceding portion within that bound. Original prefix evaluation
-is preserved. A maximum anchor is inserted only when needed to retain M. Over the
-last 400ms, the effective targets in [L,M] are UP 65→85%, DOWN 85→65%, and PEAK
-97.5→99%, subject to the existing arithmetic rounding. Phase comes from SHA256
-`crash-phase-v2:` plus seed, using the first 32 bits and thresholds .5/.7.
-The targets concern repaired rides; finite samples need not have exact 50/20/30
-counts. `NOT_APPLICABLE_LINEAR` explicitly separates LINEAR.
-
-The ideal 200ms observation grid sees the final phase, but network latency/gaps may
-prevent a client from receiving those samples. Preserving bounds and maxima does
-not preserve the time or likelihood of locking particular boosts: v3 changes WAVES
-stopping opportunities. This local implementation is not release approval, an RTP
-estimate, or a universal exposure guarantee. Total peak counts and suffix aesthetics
-remain subjects of curve review; no universal 2–4-peak claim is made.
+sample. No-ticket calls are explicitly `EXPLORATORY` with null eligibility/reason and
+ticket strength 0.5. Curve fields retain four-decimal serialization
+(`serialization_decimals: 4`); resolved min/max overrides must satisfy min <= max.
+Responses carry `math_snapshot_version: 4`, a `ride` block (duration, outcome, crash
+time, bucket, phase, pace, peak count, band, ride and pre-crash maximum) and `config`
+with the effective min/max and ticket strength. The default seed is 32 random bytes;
+an explicit 64-hex seed is used as is and any other string is SHA-256 hashed into a key.
+Active player responses never carry the `ride` block or any future path.
 
 ## Core modules (what to review)
 - `src/computations/ticketStrengthScorer.ts` (non-linear strength)
-- `src/computations/deterministicRideGenerator.ts` (legacy seeded ride/crash and shared interpolation)
-- `src/computations/feasibleRidePhase.ts` (v3 feasible suffix correction and diagnostics)
-- `src/computations/linearRideMode.ts` (linear mode path/quote math)
-- `src/computations/rideReferenceMaximum.ts` (versioned checkpoint reference / pre-crash supremum)
-- `src/computations/ridePathBuilder.ts` (authoritative effective path samples)
-- `src/services/rideMathSnapshot.ts` (opt-in math snapshot and legacy fallback)
+- `src/computations/v4/` (the only ride math: seeded keyed RNG, outcome draws, WAVES skeleton, LINEAR climb, payout band, exact odds)
+- `src/services/rideMathSnapshot.ts` (opt-in snapshot, rebuild-and-verify, 60-point path sampling)
+- `src/services/ticketEvaluation.ts` (shared ticket evaluation: filter, exact odds, eligibility, strength)
 - `src/computations/finalBoostCalculator.ts` (boost calculation + caps)
 - `src/services/rewardOptInService.ts` (precheck on ride start and ride definition creation)
 - `src/services/boostQuoteService.ts` (dynamic quote)

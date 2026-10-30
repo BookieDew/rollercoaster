@@ -468,11 +468,11 @@ that brand's rewards for the player are returned.
 **POST** `/api/rewards/:id/opt-in`
 
 The bet is already placed. This call starts the ride for that bet and freezes the
-resolved profile/mode, derived ride timing/math, phase model/diagnostics, and
-exact checkpoints in `ticketSnapshot.rideMath` (version 3). V3 checkpoint JSON and
-its interpolation metadata are authoritative. Version 1/2 snapshots preserve their
-original models; pre-snapshot rides retain their explicit legacy fallback. The
-snapshot is internal, not a new opt-in response field. `end_time` is kept in the
+resolved profile/mode, the ticket inputs, the ride parameters (duration, outcome,
+crash time, pace, payout band, maximums) and a commitment to the seed in
+`ticketSnapshot.rideMath` (version 4). Quotes and locks rebuild the ride from the
+stored seed and refuse it if anything differs from the snapshot. The snapshot is
+internal, not a new opt-in response field. `end_time` is kept in the
 response shape for compatibility but is always `null` for a live ride.
 
 The body also carries the stake and its currency (see
@@ -492,7 +492,7 @@ row) and returns 422 `REWARD_EXPIRED`.
 A `bet_id` already attached to a different reward of the same brand (any status)
 is rejected with 409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
 (`ALREADY_OPTED_IN`, `REWARD_ALREADY_USED`, `REWARD_EXPIRED`). The status change,
-bet binding, checkpoints and audit row are written in one transaction; a
+bet binding and audit row are written in one transaction; a
 concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
 
 ```json
@@ -553,20 +553,18 @@ recalculate the payout. Crash/end prevents a new lock and returns zero current b
 | Field | Meaning |
 |---|---|
 | `effective_min_boost_pct` / `effective_max_boost_pct` | Ticket-adjusted floor/cap; the cap is not promised on each ride |
-| `theoretical_max_boost_pct` | Model-dependent ride maximum/reference, not a guaranteed lockable payout. `null` in live (eligible) quotes; returned on terminal quotes, terminal lock errors and locks |
-| `maximum_model` | `WAVES_PRE_CRASH_SUPREMUM_V2` for new rides; `LEGACY_CHECKPOINT_MAX_V1` for legacy rides |
+| `theoretical_max_boost_pct` | Exact highest value the ride reaches before the crash or end, not a guaranteed lockable payout. `null` in live (eligible) quotes; returned on terminal quotes, terminal lock errors and locks |
+| `maximum_model` | `PRE_CRASH_SUPREMUM_V4` |
 | `ride_elapsed_seconds` | Authoritative sampled offset from start, with millisecond precision; eligible/terminal quotes and terminal lock error details |
 | `ride_stop_at_offset_seconds` | Successful lock's exact evaluation offset; pair it with `locked_boost_pct`, not interpolation of the sampled path |
 | `ride_end_at_offset_seconds` / `ride_crash_at_offset_seconds` | Completed/locked schedule offsets; active quotes return null |
 | `ride_path` | 60 full-ride samples, returned only after lock or terminal quote/lock error; never present in active quotes |
 
-The v2 maximum model includes the baseline WAVES curve's left-hand limit at crash,
-then applies the final payout transform. V3 preserves that maximum and keeps
-LINEAR's v2 behavior. Eligible new WAVES suffixes change their stopping opportunities,
-while old versions and locks retain their saved behavior. The
-exact crash/end is zero, and finite server sampling may never attain the limit.
-The legacy checkpoint-only reference can be lower than a live WAVES value between
-checkpoints. Old locks without saved model metadata omit `maximum_model`.
+The maximum is the exact highest value before the open crash/end boundary, after
+the payout transform. The exact crash/end value is zero, and finite server
+sampling may never attain the maximum. In LINEAR the climb stops at this ride's
+maximum. Rides that were in flight under older math were closed by migration 016: their
+reward is `EXPIRED` and quote and lock answer `REWARD_EXPIRED`.
 
 `ride_path` uses `{ "timePct": number, "baseBoostValue": number }`: `timePct` is
 fractional ride duration and the historically named `baseBoostValue` is the actual
@@ -580,16 +578,16 @@ forecast the future path.
 sample may arrive after the crash/end offset. Quote evaluation and status checks
 use one server instant. Unrelated ineligibility omits this field.
 
-Crash timing still uses the existing weighted buckets and rounded minimum-time
-logic (including the known exact-minimum precision edge). The local v3 WAVES phase
-model targets UP/PEAK/DOWN at 50/20/30 only on feasible rides: a bounded suffix of
-at most 800ms starts no earlier than two seconds and needs at least 600ms of room.
-Its last 400ms shapes actual effective boost direction/near-top position. Timing-
-constrained, flat/rounding-degenerate, and no-crash rides stay unchanged with explicit
-exception status. Legacy labels still describe checkpoint shaping. These are
-conditional targets, not exact finite-sample proportions or a guarantee of client
-observations through network gaps. This is local implementation behavior, not
-release approval, an RTP promise, or a claim of unchanged WAVES payouts.
+Ride timing (V4): the ride is built from a secret 32-byte seed through keyed
+(HMAC) random streams, so the same seed and settings always give the same ride.
+The outcome is no-crash with 8% probability. Otherwise the crash falls in a
+window after the minimum crash time, in a weighted bucket (EARLY 10%, MID 65%,
+LATE 25%) with a crash phase (UP 50%, PEAK 20%, DOWN 30%). WAVES is a multi-peak
+ride; LINEAR climbs from the effective floor toward this ride's maximum at the
+MEDIUM pace (9 seconds to the top of the band). These are random draws per
+ride, not guaranteed proportions in a finite sample or what every client
+observes. This is local implementation behavior, not release approval or an RTP
+promise.
 
 ### Get Quote
 
@@ -622,7 +620,7 @@ revealed by the terminal quote and the lock below):
   "effective_min_boost_pct": 0.05,
   "effective_max_boost_pct": 1,
   "theoretical_max_boost_pct": null,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4",
   "ticket_strength": 0.042009,
   "boost_model": {
     "selection_weight": 0.75,
@@ -651,7 +649,7 @@ Terminal response excerpts below omit ticket/model details and the full
   "reason_code": "RIDE_ENDED",
   "current_boost_pct": 0,
   "theoretical_max_boost_pct": 0.290494,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4",
   "ride_elapsed_seconds": 2.781,
   "ride_end_at_offset_seconds": 2.78,
   "ride_crash_at_offset_seconds": 2.78
@@ -667,7 +665,7 @@ crash fraction 0.2134), returns:
   "reason_code": "RIDE_CRASHED",
   "current_boost_pct": 0,
   "theoretical_max_boost_pct": 0.131805,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4",
   "ride_elapsed_seconds": 2.041,
   "ride_end_at_offset_seconds": 9.563,
   "ride_crash_at_offset_seconds": 2.041
@@ -703,7 +701,7 @@ the full response also includes `boost_model` and `ride_path`:
   "effective_min_boost_pct": 0.05,
   "effective_max_boost_pct": 1,
   "theoretical_max_boost_pct": 0.290494,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4",
   "ride_stop_at_offset_seconds": 1.39,
   "ride_end_at_offset_seconds": 2.78,
   "ride_crash_at_offset_seconds": 2.78
@@ -1086,13 +1084,13 @@ never be locked.
 
 Optional `profile_id` supplies eligibility, mode, and boost settings; explicit
 `min_boost_pct`/`max_boost_pct` overrides take precedence. The resolved min must be
-<= max, including when only one override is supplied. The endpoint uses the current
-v3 phase model and v2 maximum model, not the model of any historical reward/lock.
-It adds `math_snapshot_version: 3` and `phase_diagnostics`; the latter uses model
-`FEASIBLE_WAVES_PHASE_V3` and one of `REPAIRED`, `TIMING_CONSTRAINED`,
-`FLAT_OR_ROUNDING_DEGENERATE`, `NO_CRASH_UNCHANGED`, or `NOT_APPLICABLE_LINEAR`.
-A repaired diagnostic includes phase and suffix/window timing; exception cases
-must not be counted as successful phase repairs. These operator-only details are
+<= max, including when only one override is supplied. The endpoint always uses
+V4 math (`math_snapshot_version: 4`). The `ride` block describes the whole
+simulated ride (duration, outcome, crash time, bucket, phase, pace, peak count,
+payout band, ride maximum and pre-crash maximum). `config` includes the
+effective min/max and `ticket_strength`; an exploratory run (no ticket) uses
+ticket strength 0.5. `combined_odds` is a number, or an exact decimal string
+when the value is beyond the double range. These operator-only details are
 not added to active player quotes.
 
 Supplied tickets undergo the same exclusions, SGP handling, and eligibility gates
@@ -1119,7 +1117,7 @@ Reproducible eligible WAVES request using defaults except the stated boost range
 }
 ```
 
-Response excerpt (config, checkpoints, curve, and phase diagnostic detail omitted):
+Response excerpt (config, ride, curve detail omitted):
 
 ```json
 {
@@ -1128,8 +1126,8 @@ Response excerpt (config, checkpoints, curve, and phase diagnostic detail omitte
   "eligible": true,
   "reason_code": "ELIGIBLE",
   "serialization_decimals": 4,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2",
-  "math_snapshot_version": 3,
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4",
+  "math_snapshot_version": 4,
   "ticket_analysis": {
     "qualifying_selections": 3,
     "combined_odds": 3.375,
@@ -1140,18 +1138,9 @@ Response excerpt (config, checkpoints, curve, and phase diagnostic detail omitte
 
 The curve has `sample_points + 1` entries, including endpoints. Curve fields are
 `time_pct`, `base_ride_value`, and `final_boost_pct`, serialized to four decimals.
-In the controlled default-duration fixture above, the midpoint (`time_pct: 0.5`)
-has `final_boost_pct: 0.2511`; the equivalent LINEAR profile gives `0.1702`.
-Live quote/lock values are respectively `0.251138` and `0.170247`. Compare at the
-unrounded sampling fraction before accounting for serialization, particularly near
-terminal boundaries. Raw checkpoints are not guaranteed effective payouts.
-`config.checkpoint_count` is the original generation parameter; v3 insertion/removal
-can change the returned array length. Preserve checkpoint ordering, duplicate
-boundary timestamps, full numeric precision, and optional `incoming_segment_end`
-(`time_offset_pct`, `base_boost_value`) when replaying the curve. That metadata
-retains the original incoming interpolation at inserted boundaries, including
-rounding; discarding or deduplicating it can alter values. Prefer the supplied
-`curve` for operator visualization and the shared server evaluator for exact replay.
+Compare with live quote/lock values at the unrounded sampling fraction, particularly
+near terminal boundaries. A non-hex `seed` string is hashed (SHA-256) into the key;
+a 64-hex seed is used as is; omit it for a random one.
 
 With only two qualifying selections, the response excerpt becomes:
 
@@ -1161,14 +1150,14 @@ With only two qualifying selections, the response excerpt becomes:
   "eligible": false,
   "reason_code": "MIN_SELECTIONS_NOT_MET",
   "serialization_decimals": 4,
-  "maximum_model": "WAVES_PRE_CRASH_SUPREMUM_V2"
+  "maximum_model": "PRE_CRASH_SUPREMUM_V4"
 }
 ```
 
 Every curve entry then has `final_boost_pct: null`. To explore without a ticket,
 omit `ticket` entirely; `evaluation_mode` is `EXPLORATORY`, `eligible` and
 `reason_code` are null, and `ticket_analysis` is omitted. Simulation exposes full
-seed/checkpoint/curve information for administrators; do not use it to populate an
+seed/ride/curve information for administrators; do not use it to populate an
 active player chart.
 
 ---

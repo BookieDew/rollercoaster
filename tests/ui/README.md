@@ -36,7 +36,7 @@ This workstation's cached executable is
 PTY alive avoids the CLI browser daemon being terminated with its parent.
 
 - `real-workflow.js`: real profile/grant/precheck/start, at least four progressive
-  observations, then exact lock in WAVES and LINEAR; V2 discriminator, current vs
+  observations, then exact lock in WAVES and LINEAR; V4 discriminator, current vs
   marker equality, no active full path, frozen outcome, adaptive desktop chart
   (320px minimum; mobile retains 260px),
   terminal full-sample mapping and rendered coordinates, plus after-stop reveal.
@@ -69,7 +69,7 @@ production minimum crash time is two seconds; its live screenshot and lock happe
 before that minimum. Browser/host scheduling delays can make this timing check
 fail and should be investigated rather than accepted as a payout discrepancy.
 
-For a real long WAVES ride on phase V3, run `long-v3-prepare.js` in the same
+For a real long WAVES ride on V4, run `long-v3-prepare.js` in the same
 browser. It prints a granted reward ID. Set its seed using
 `node tests/ui/seed-qa-reward.cjs QA_DB REWARD_ID SEED`; this helper refuses any
 path outside the isolated `rollercoaster-demo-*/qa.sqlite` directories and refuses
@@ -98,9 +98,8 @@ captures. Generic
 with scenario-specific names when retaining both cases.
 
 `node tests/ui/inspect-qa-snapshots.cjs QA_DB` validates that all opted-in rewards
-in that isolated DB have snapshot version 3 and reports the phase model,
-maximum model, and incoming-segment metadata count. Phase version 3 retains the
-`WAVES_PRE_CRASH_SUPREMUM_V2` maximum-model discriminator.
+in that isolated DB have snapshot version 4 and reports the maximum model and
+snapshot keys. The maximum-model discriminator is `PRE_CRASH_SUPREMUM_V4`.
 
 For a midride full-reveal preview, use the crash seed with `long-v3-prepare.js`,
 then run `two-block-preview.js` instead of `long-v3-ride.js`. It captures an actual

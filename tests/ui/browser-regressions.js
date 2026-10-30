@@ -3,7 +3,7 @@ async (page) => {
   const assert = (value, message) => { if (!value) throw new Error(message); };
   let quoteIndex = 0, rewardIndex = 0, active = 0, maxActive = 0, quoteBehavior, lockBehavior, optInBehavior;
   const quote = (seconds, boost) => ({ eligible: true, current_boost_pct: boost, ride_elapsed_seconds: seconds });
-  const locked = (seconds = 0.45) => ({ lock_id: 'lock', locked_boost_pct: 0.123456, ride_stop_at_offset_seconds: seconds, theoretical_max_boost_pct: 0.5, maximum_model: 'WAVES_PRE_CRASH_SUPREMUM_V2', ride_path: [{ timePct: 0, baseBoostValue: 0.05 }, { timePct: 1, baseBoostValue: 0 }] });
+  const locked = (seconds = 0.45) => ({ lock_id: 'lock', locked_boost_pct: 0.123456, ride_stop_at_offset_seconds: seconds, theoretical_max_boost_pct: 0.5, maximum_model: 'PRE_CRASH_SUPREMUM_V4', ride_path: [{ timePct: 0, baseBoostValue: 0.05 }, { timePct: 1, baseBoostValue: 0 }] });
   await page.unroute('**/api/**');
   await page.route('**/api/**', async route => {
     const path = route.request().url().replace(/^https?:\/\/[^/]+/, '');

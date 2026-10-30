@@ -41,9 +41,9 @@
               <div class="ride-outcome" id="rideOutcomeBox" style="display: none;">
                 <div class="meta">
                   <span class="outcome-stat"><span id="rideFinalLabel">Final boost</span><span id="rideFinalBoost">n/a</span></span>
-                  <span class="outcome-stat"><span id="rideMaximumLabel">Reference maximum (legacy)</span><span id="rideFinalMaxBoost">n/a</span></span>
+                  <span class="outcome-stat"><span id="rideMaximumLabel">Ride maximum</span><span id="rideFinalMaxBoost">n/a</span></span>
                 </div>
-                <p class="outcome-help" id="rideMaximumHelp">Reference maximum is the legacy model reference; observed WAVES values can exceed it. Locked boost is final.</p>
+                <p class="outcome-help" id="rideMaximumHelp">Ride maximum is the highest value the ride reaches before it crashes or ends, not a guaranteed lockable boost. Locked boost is final.</p>
               </div>
         </div>
         <div class="card ride-chart-card chart-panel" id="rideChartCard">
@@ -336,9 +336,9 @@
         elapsedSeconds.textContent = last ? last.seconds.toFixed(3) : '0.000';
         rideOutcomeBox.style.display = ride.final ? 'block' : 'none';
         if (ride.final) {
-          const trueMaximum = ride.final.maximumModel === 'WAVES_PRE_CRASH_SUPREMUM_V2';
+          const trueMaximum = ride.final.maximumModel === 'PRE_CRASH_SUPREMUM_V4' || ride.final.maximumModel === 'WAVES_PRE_CRASH_SUPREMUM_V2';
           document.getElementById('rideMaximumLabel').textContent = trueMaximum ? 'Ride maximum' : 'Reference maximum (legacy)';
-          document.getElementById('rideMaximumHelp').textContent = trueMaximum ? 'Ride maximum is the maximum before crash or end, not a guaranteed lockable boost. Observed peak uses only received samples.' : 'Legacy reference may be below observed WAVES values. Observed peak uses only received samples.';
+          document.getElementById('rideMaximumHelp').textContent = trueMaximum ? 'Highest value the ride reaches before it crashes or ends. It is not a guaranteed lockable boost. Observed peak uses only received samples.' : 'Older rides keep their stored reference, which may be below observed WAVES values. Observed peak uses only received samples.';
           rideFinalLabel.textContent = { locked: 'Locked boost', crashed: 'Crashed boost', ended: 'Ended boost' }[ride.final.phase];
           rideFinalBoost.textContent = formatPercent(ride.final.boost, 2);
           rideFinalMaxBoost.textContent = ride.final.referenceMax === null ? 'n/a' : formatPercent(ride.final.referenceMax, 2);
