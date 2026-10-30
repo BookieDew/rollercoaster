@@ -6,7 +6,7 @@ export type V4Mode = 'WAVES' | 'LINEAR';
 export type V4Outcome = 'CRASHED' | 'ENDED';
 export type V4CrashBucket = 'EARLY' | 'MID' | 'LATE';
 export type V4CrashPhase = 'UP' | 'PEAK' | 'DOWN';
-/** LINEAR climb presets: the cap is reached at 6 s (FAST), 9 s (MEDIUM) or 12 s (SLOW). */
+/** LINEAR climb presets: the band top would be reached at 6 s (FAST), 9 s (MEDIUM) or 12 s (SLOW); each ride stops earlier at its own cap. */
 export type V4LinearPace = 'FAST' | 'MEDIUM' | 'SLOW';
 
 export interface V4RideConfig {

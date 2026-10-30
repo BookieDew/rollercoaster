@@ -73,7 +73,7 @@ export function inspectV4Ride(seedHex: string, config: V4RideConfig): V4RideInsp
 
 function wavesCurve(skeleton: WavesSkeleton, band: PayoutBand): (t: number) => number {
   const path = { times: skeleton.times.slice(), levels: skeleton.levels.slice() };
-  const frozenBand = { min: band.min, max: band.max };
+  const frozenBand = { min: band.min, max: band.max, bend: band.bend };
   return (t) => round6(levelToPayout(levelAt(path, t), frozenBand));
 }
 

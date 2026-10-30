@@ -9,7 +9,7 @@ import {
   type V4RideConfig,
 } from '../../../src/computations/v4';
 import * as publicApi from '../../../src/computations/v4';
-import { levelToPayout } from '../../../src/computations/v4/payout';
+import { PAYOUT_CALIBRATION, bendLevel, floorPinnedShare, levelToPayout, payoutBend } from '../../../src/computations/v4/payout';
 import { inspectV4Ride } from '../../../src/computations/v4/ride';
 import { levelAt } from '../../../src/computations/v4/waves';
 import { PROFILE, TICKETS, labConfig, namedSeed, sampleSeed, type TicketName } from './helpers';
@@ -160,6 +160,7 @@ describe('WAVES payout space keeps the V3 final mapping', () => {
       for (const [lo, hi] of [[0.05, 1], [0.1, 0.4], [0, 2]]) {
         const config = { ...labConfig('medium'), minBoostPct: lo, maxBoostPct: hi, effectiveMin: -5, effectiveMax: 6, ticketStrength };
         const band = payoutBand(config);
+        expect(band.bend).toBe(0);
         for (let k = 0; k <= 50; k++) {
           const v3Raw = wavesFinalMapping(lo + (k / 50) * (hi - lo), config);
           worst = Math.max(worst, Math.abs(levelToPayout(k / 50, band) - v3Raw));
@@ -167,6 +168,53 @@ describe('WAVES payout space keeps the V3 final mapping', () => {
       }
     }
     expect(worst).toBeLessThan(1e-12);
+  });
+});
+
+describe('WAVES payout calibration (V3-cost parity, owner decision 2026-10-30)', () => {
+  it('bends by the share V3 pins to the floor: weak barely, medium ~1, strong ~3.9', () => {
+    const expected = { weak: [0.1345, 0.09], medium: [0.3485, 1.06], strong: [0.5068, 3.91] } as const;
+    for (const name of Object.keys(expected) as TicketName[]) {
+      const config = labConfig(name);
+      expect(floorPinnedShare(config)).toBeCloseTo(expected[name][0], 3);
+      expect(payoutBend(config)).toBeCloseTo(expected[name][1], 2);
+      expect(payoutBand(config).bend).toBe(payoutBend(config));
+    }
+  });
+
+  it('keeps the band ends, is strictly increasing with slope >= 1 / (1 + bend), and is the identity at bend 0', () => {
+    for (const bend of [0, 0.09, 1, 2.5, PAYOUT_CALIBRATION.MAX_BEND]) {
+      expect(bendLevel(0, bend)).toBe(0);
+      expect(bendLevel(1, bend)).toBe(1);
+      let previous = 0;
+      for (let k = 1; k <= 1000; k++) {
+        const u = k / 1000;
+        const g = bendLevel(u, bend);
+        if (bend === 0) expect(g).toBe(u);
+        expect(g).toBeLessThanOrEqual(u);
+        expect((g - previous) * 1000).toBeGreaterThanOrEqual(1 / (1 + bend) - 1e-9);
+        previous = g;
+      }
+    }
+  });
+
+  it('caps the bend (no-flat guard) and handles degenerate ranges', () => {
+    const base = labConfig('medium');
+    // V3 pins (almost) the whole range to the floor.
+    expect(payoutBend({ ...base, effectiveMin: 0.69, effectiveMax: 0.7 })).toBe(PAYOUT_CALIBRATION.MAX_BEND);
+    expect(payoutBend({ ...base, effectiveMin: 5, effectiveMax: 6 })).toBe(PAYOUT_CALIBRATION.MAX_BEND);
+    expect(floorPinnedShare({ ...base, effectiveMin: 5, effectiveMax: 6 })).toBe(1);
+    // Empty profile range: nothing to bend.
+    expect(payoutBend({ ...base, minBoostPct: 0.2, maxBoostPct: 0.2 })).toBe(0);
+  });
+
+  it('keeps ticket order: at every level weak < medium < strong', () => {
+    const bands = (['weak', 'medium', 'strong'] as TicketName[]).map((name) => payoutBand(labConfig(name)));
+    for (let k = 0; k <= 100; k++) {
+      const pays = bands.map((band) => levelToPayout(k / 100, band));
+      expect(pays[0]).toBeLessThan(pays[1]);
+      expect(pays[1]).toBeLessThan(pays[2]);
+    }
   });
 });
 
