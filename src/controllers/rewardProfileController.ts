@@ -39,6 +39,7 @@ export async function createProfile(
       rideMode: validated.ride_mode,
       rideDurationSeconds: validated.ride_duration_seconds,
       segment: validated.segment ?? null,
+      availability: validated.availability,
     });
 
     if (!result.success || !result.data) {
@@ -143,6 +144,7 @@ export async function updateProfile(
       maxBonusMinor: validated.max_bonus_minor,
       rewardValiditySeconds: validated.reward_validity_seconds,
       segment: validated.segment,
+      availability: validated.availability,
       isActive: validated.is_active,
     });
 

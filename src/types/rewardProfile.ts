@@ -3,6 +3,13 @@ import { LEGACY_BRAND_ID } from './brand';
 export type RideMode = 'WAVES' | 'LINEAR';
 
 /**
+ * PERSONAL: rewards are granted in advance to chosen players and carry over until used or expired.
+ * OPEN: no advance grant; the reward is created when the player uses the boost on a qualifying bet.
+ */
+export type ProfileAvailability = 'PERSONAL' | 'OPEN';
+export const PROFILE_AVAILABILITIES: readonly ProfileAvailability[] = ['PERSONAL', 'OPEN'];
+
+/**
  * brandId, maxBonusMinor and rewardValiditySeconds are typed optional only so
  * entities built by code that predates Phase 1a still type-check. Repositories
  * always populate them; missing means brand 'default', no caps and no expiry.
@@ -30,6 +37,8 @@ export interface RewardProfileVersion {
   rewardValiditySeconds?: number | null;
   /** Optional operator label for organising and reporting; null = no segment. */
   segment?: string | null;
+  /** Missing (entities built by older code) means PERSONAL. */
+  availability?: ProfileAvailability;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -40,6 +49,8 @@ export interface CreateRewardProfileInput {
   maxBonusMinor: Record<string, number>;
   rewardValiditySeconds: number;
   segment?: string | null;
+  /** Default PERSONAL. */
+  availability?: ProfileAvailability;
   name: string;
   description?: string;
   minSelections: number;
@@ -75,6 +86,7 @@ export interface UpdateRewardProfileInput {
   rewardValiditySeconds?: number;
   /** null clears the label; undefined leaves it unchanged. */
   segment?: string | null;
+  availability?: ProfileAvailability;
   isActive?: boolean;
 }
 
@@ -98,6 +110,7 @@ export interface RewardProfileDTO {
   max_bonus_minor: Record<string, number>;
   reward_validity_seconds: number | null;
   segment: string | null;
+  availability: ProfileAvailability;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -124,6 +137,7 @@ export function toDTO(profile: RewardProfileVersion): RewardProfileDTO {
     max_bonus_minor: profile.maxBonusMinor ?? {},
     reward_validity_seconds: profile.rewardValiditySeconds ?? null,
     segment: profile.segment ?? null,
+    availability: profile.availability ?? 'PERSONAL',
     is_active: profile.isActive,
     created_at: profile.createdAt,
     updated_at: profile.updatedAt,

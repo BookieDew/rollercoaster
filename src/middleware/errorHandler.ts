@@ -160,6 +160,13 @@ function getStatusCodeForReasonCode(code: ReasonCode): number {
     case ReasonCode.INVALID_CONFIGURATION:
     case ReasonCode.CURRENCY_NOT_SUPPORTED:
     case ReasonCode.SETTLEMENT_UNAVAILABLE:
+    case ReasonCode.SELECTION_ALREADY_STARTED:
+    case ReasonCode.SELECTION_ALREADY_SETTLED:
+    case ReasonCode.SELECTION_TIMING_REQUIRED:
+    case ReasonCode.NO_OPEN_PROFILE:
+    case ReasonCode.PROFILE_NOT_OPEN:
+    case ReasonCode.PROFILE_SEGMENT_MISMATCH:
+    case ReasonCode.PROFILE_IS_OPEN:
       return 422;
 
     case ReasonCode.INTERNAL_ERROR:

@@ -17,6 +17,22 @@ export enum ReasonCode {
   // Opt-in reason codes
   BET_ALREADY_BOUND = 'BET_ALREADY_BOUND',
   CURRENCY_NOT_SUPPORTED = 'CURRENCY_NOT_SUPPORTED',
+  /** A selection has kicked off (prematch, now >= starts_at). */
+  SELECTION_ALREADY_STARTED = 'SELECTION_ALREADY_STARTED',
+  /** A selection is already settled. */
+  SELECTION_ALREADY_SETTLED = 'SELECTION_ALREADY_SETTLED',
+  /** Open boosts: a selection carries neither starts_at nor live: true. */
+  SELECTION_TIMING_REQUIRED = 'SELECTION_TIMING_REQUIRED',
+
+  // Open boost reason codes
+  /** No active OPEN profile of the brand applies to this player. */
+  NO_OPEN_PROFILE = 'NO_OPEN_PROFILE',
+  /** The named profile version is PERSONAL (advance grant only). */
+  PROFILE_NOT_OPEN = 'PROFILE_NOT_OPEN',
+  /** The named profile version is for a segment the player is not in. */
+  PROFILE_SEGMENT_MISMATCH = 'PROFILE_SEGMENT_MISMATCH',
+  /** Personal (advance) grants refuse OPEN profiles in the MVP (owner, 2026-11-04T19:55). */
+  PROFILE_IS_OPEN = 'PROFILE_IS_OPEN',
 
   // Lock reason codes
   BET_ALREADY_LOCKED = 'BET_ALREADY_LOCKED',

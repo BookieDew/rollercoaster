@@ -11,6 +11,12 @@ export interface Selection {
   sgp_group_id?: string;
   eligible?: boolean;
   ineligible_reason?: string;
+  /** Kick-off (ISO 8601). A prematch selection can be boosted only before it. */
+  starts_at?: string;
+  /** In play: can be boosted until it is settled. */
+  live?: boolean;
+  /** Already settled: never boostable. */
+  settled?: boolean;
 }
 
 export interface Ticket {

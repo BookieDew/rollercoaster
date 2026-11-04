@@ -139,9 +139,24 @@ does not change that started ride or an existing locked payout.
 
 A segment is an optional operator label on a profile version and on a granted reward, for organising and
 reporting (for example `VIP`, `new-players`, `DE:promo`). The operator owns the player groups and decides who
-gets which profile; the API stores no group membership and enforces nothing based on a segment. Value: trimmed
-string of 1-64 characters from `A-Z a-z 0-9 space _ . : -`; `null` or absent means no segment. Anything else is
-400 `VALIDATION_ERROR`.
+gets which profile; the API stores no group membership. The only rule that reads a segment is the open-boost
+profile pick, which uses the `segments` the operator sends with each call (see [Open boosts](#open-boosts)).
+Value: trimmed string of 1-64 characters from `A-Z a-z 0-9 space _ . : -`; `null` or absent means no segment.
+Anything else is 400 `VALIDATION_ERROR`.
+
+### Availability (personal or open)
+
+`availability` is `PERSONAL` (default) or `OPEN`:
+- `PERSONAL`: rewards are granted in advance (`POST /api/rewards`, `/api/rewards/bulk`) to chosen players and
+  carry over (`GRANTED`) until used or expired. Unchanged behaviour.
+- `OPEN`: no advance grant. The profile applies to every qualifying bet of the brand (no per-player limit); the
+  reward is created when the player uses the boost on a placed bet (`POST /api/boost/open-opt-in`). In the MVP
+  `POST /api/rewards` and `/api/rewards/bulk` refuse an `OPEN` profile with 422 `PROFILE_IS_OPEN` (bulk writes
+  nothing); use a `PERSONAL` profile for carry-over boosts. A reward granted before its profile was switched to
+  `OPEN` can still be opted into, under the open-boost slip-timing rules.
+
+Existing profiles are `PERSONAL`. Create accepts `availability`; `PUT` changes it when present and keeps it when
+absent. Any other value is 400 `VALIDATION_ERROR`.
 
 ### Create Profile
 
@@ -167,7 +182,8 @@ string of 1-64 characters from `A-Z a-z 0-9 space _ . : -`; `null` or absent mea
   "ride_duration_seconds": 3600,
   "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
   "reward_validity_seconds": 604800,
-  "segment": "VIP"  // Optional
+  "segment": "VIP",  // Optional
+  "availability": "PERSONAL"  // Optional: PERSONAL (default) or OPEN
 }
 
 // Response (201 Created)
@@ -191,13 +207,14 @@ string of 1-64 characters from `A-Z a-z 0-9 space _ . : -`; `null` or absent mea
   "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
   "reward_validity_seconds": 604800,
   "segment": "VIP",
+  "availability": "PERSONAL",
   "is_active": true,
   "created_at": "2024-01-15T10:30:00.000Z",
   "updated_at": "2024-01-15T10:30:00.000Z"
 }
 ```
 
-Every profile response returns `segment` (`null` when none). `PUT /api/profiles/:id` accepts `segment`:
+Every profile response returns `segment` (`null` when none) and `availability`. `PUT /api/profiles/:id` accepts `segment`:
 a value sets it, `null` clears it, leaving it out keeps it.
 
 `brand_id`, `max_bonus_minor` and `reward_validity_seconds` are required.
@@ -535,13 +552,27 @@ The body also carries the stake and its currency (see
   but ignored.
 - Selection ids must be unique within the ticket (400 `VALIDATION_ERROR`
   otherwise), because settlement reports one result per `selection_id`.
+- Selection slip-timing fields (contract change, slice API-3): `starts_at` (ISO 8601
+  date-time with a zone, `Z` or `+02:00`), `live` and `settled` (booleans) are optional on
+  every ticket: personal opt-in, eligibility precheck, open opt-in, offers and
+  simulation (quote and lock take no ticket). They used to be silently dropped; now a wrong type or a `starts_at`
+  without a zone is 400 `VALIDATION_ERROR`, and valid values are stored with the
+  ticket snapshot.
 
 The stake, currency and the profile's cap for that currency are frozen on the
 reward. Opting in after `valid_until` marks the reward `EXPIRED` (with an audit
 row) and returns 422 `REWARD_EXPIRED`.
 
-A `bet_id` already attached to a different reward of the same brand (any status)
-is rejected with 409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
+Slip timing is optional here: when a selection carries `settled: true` the opt-in is
+422 `SELECTION_ALREADY_SETTLED`; when it carries `starts_at` (and not `live: true`) and
+that kick-off has passed, 422 `SELECTION_ALREADY_STARTED`. Without these fields nothing
+changes. (Open boosts require them, see [Open boosts](#open-boosts).) Exception: when the
+reward's profile is `OPEN` (a reward granted before the switch, or a returned token of
+such a reward), the open-boost rule applies and every selection needs `starts_at` or
+`live: true` (422 `SELECTION_TIMING_REQUIRED`).
+
+A `bet_id` already attached to a different reward of the same brand (any status,
+personal or open) is rejected with 409 `BET_ALREADY_BOUND`. Re-opting the same reward keeps its existing answers
 (`ALREADY_OPTED_IN`, `REWARD_ALREADY_USED`, `REWARD_EXPIRED`). The status change,
 bet binding and audit row are written in one transaction; a
 concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
@@ -592,6 +623,129 @@ concurrent second opt-in of the same reward gets 409 `ALREADY_OPTED_IN`.
   "end_time": null
 }
 ```
+
+---
+
+## Open boosts
+
+Owner flow: the operator sets an `OPEN` profile for everyone (`segment: null`) or for a player class
+(`segment: "VIP"`); the bet slip may show that the slip qualifies; the player places the bet and clicks "use
+boost" while still in the slip. The reward is created at that click. One boost per bet: a `(brand_id, bet_id)`
+carries at most one reward, personal or open.
+
+**Profile pick.** Active `OPEN` profile versions of `brand_id` whose `segment` is `null` or one of the request's
+`segments` (the player classes the operator says the player is in; nothing is stored). A segment profile beats an
+everyone profile; still tied, the newest (`created_at`). The operator may name `profile_version_id` instead: it must
+be active, `OPEN`, of the same brand and with `segment` null or in `segments`.
+
+**Slip timing (required for open boosts).** Every selection carries `starts_at` (ISO 8601 with offset, e.g.
+`2026-11-04T18:00:00Z`) or `live: true`. A prematch selection is accepted only strictly before `starts_at`; a live
+one until it is settled; any `settled: true` selection is refused. Leaving the slip ends the offer: that UI rule is
+the operator's.
+
+### Open Boost Offer
+
+**POST** `/api/boost/offers`
+
+Read-only preview for the slip (writes nothing, no audit row). Returns the applicable profile's entry criteria and
+whether this slip qualifies now. It never returns the boost range, the bonus cap, a ride path or timing.
+
+```json
+// Request
+{
+  "brand_id": "acme",
+  "user_id": "user-12345",
+  "segments": ["VIP"],           // Optional
+  "stake_minor": 1000,           // Optional: validated like the open opt-in (400), does not change the answer
+  "currency": "EUR",             // Optional: checked against the profile's currencies
+  "ticket": {
+    "selections": [
+      { "id": "sel-001", "odds": 1.85, "starts_at": "2026-11-04T18:00:00Z" },
+      { "id": "sel-002", "odds": 2.10, "starts_at": "2026-11-04T20:45:00Z" },
+      { "id": "sel-003", "odds": 1.65, "live": true }
+    ]
+  }
+}
+
+// Response (200 OK)
+{
+  "brand_id": "acme",
+  "user_id": "user-12345",
+  "qualifies": true,
+  "reason_code": "ELIGIBLE",
+  "reason_codes": [],
+  "profile": {
+    "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "VIP Combo Boost",
+    "description": null,
+    "segment": "VIP",
+    "min_selections": 3,
+    "min_combined_odds": 3,
+    "min_selection_odds": 1.2
+  },
+  "qualifying_selection_count": 3,
+  "total_selection_count": 3,
+  "combined_odds": 6.41025
+}
+```
+
+When the slip does not qualify, `qualifies` is `false`, `reason_codes` lists every failing reason (currency,
+then timing: `SELECTION_ALREADY_SETTLED`, `SELECTION_ALREADY_STARTED`, `SELECTION_TIMING_REQUIRED`, then
+`MIN_SELECTIONS_NOT_MET` or `MIN_COMBINED_ODDS_NOT_MET`) and `reason_code` is the first. When no open profile
+applies: `reason_code` `NO_OPEN_PROFILE`, `profile` `null`, `qualifying_selection_count` and `combined_odds` `null`.
+
+### Use an Open Boost
+
+**POST** `/api/boost/open-opt-in`
+
+The bet is placed and the player clicks "use boost". In one transaction: pick the profile, apply the same checks as
+the personal opt-in (currency, slip timing, minimum selections and combined odds), create the reward (`GRANT` audit
+row with `trigger: "OPEN"`) and enter it (`OPT_IN` audit row with `trigger: "OPEN"`), starting the ride. Any
+failure writes nothing. The response is the personal opt-in response. The reward then quotes, locks, settles and
+expires like a personal reward (it is never left `GRANTED`; an unlocked ride expires by the ride-over grace rule),
+with one exception: a cancelled open-boost bet returns no token (`replacement_status: "NOT_ISSUED_OPEN_BOOST"`, see
+[Settle Bet](#settle-bet)); the next qualifying bet gets the open boost again.
+
+```json
+// Request
+{
+  "brand_id": "acme",
+  "user_id": "user-12345",
+  "segments": ["VIP"],                     // Optional
+  "profile_version_id": "550e8400-...",    // Optional: name the profile explicitly
+  "bet_id": "bet-789",
+  "stake_minor": 1000,
+  "currency": "EUR",
+  "ticket": {
+    "selections": [
+      { "id": "sel-001", "odds": 1.85, "starts_at": "2026-11-04T18:00:00Z" },
+      { "id": "sel-002", "odds": 2.10, "starts_at": "2026-11-04T20:45:00Z" },
+      { "id": "sel-003", "odds": 1.65, "live": true }
+    ]
+  }
+}
+
+// Response (200 OK)
+{
+  "reward_id": "660e8400-e29b-41d4-a716-446655440001",
+  "brand_id": "acme",
+  "status": "ENTERED",
+  "ride_started": true,
+  "stake_minor": 1000,
+  "currency": "EUR",
+  "bonus_cap_minor": 50000,
+  "end_time": null
+}
+```
+
+Errors: 422 `NO_OPEN_PROFILE`; with `profile_version_id`: 404 `PROFILE_NOT_FOUND` (unknown or another brand),
+422 `PROFILE_INACTIVE`, 422 `PROFILE_NOT_OPEN`, 422 `PROFILE_SEGMENT_MISMATCH`; 422 `CURRENCY_NOT_SUPPORTED`,
+`SELECTION_ALREADY_SETTLED`, `SELECTION_ALREADY_STARTED`, `SELECTION_TIMING_REQUIRED`, `MIN_SELECTIONS_NOT_MET`,
+`MIN_COMBINED_ODDS_NOT_MET`. A bet that already carries a boost (any status) is answered before any other check and
+writes nothing: the same player repeating the call for a bet that already uses an open boost gets 409
+`ALREADY_OPTED_IN` with `details: { "reward_id": "..." }` (like repeating a personal opt-in); another player's bet, or
+a bet boosted by a personal reward, is 409 `BET_ALREADY_BOUND`. Concurrent calls for one bet create exactly one
+reward and the others get the same answers. Duplicate selection ids: 400 `VALIDATION_ERROR`.
 
 ---
 
@@ -993,7 +1147,11 @@ the same brand, user and profile, with a fresh ride seed, `replaces_reward_id` s
 to the original reward and the original `valid_until` copied. The original reward
 stays `USED`. If the original `valid_until` has already passed, no replacement is
 issued: `replacement_reward_id` is `null` and `replacement_status` is
-`NOT_ISSUED_EXPIRED`. `replacement_status` is `null` for every other result.
+`NOT_ISSUED_EXPIRED`. A bet that used an open boost (`POST /api/boost/open-opt-in`)
+never returns a token, on settle or resettle: `replacement_reward_id` is `null`,
+`replacement_status` is `NOT_ISSUED_OPEN_BOOST`, and the settlement audit row carries
+`openBoost: true`. Whether a bet used an open boost is frozen at opt-in; a later
+profile edit does not change it. `replacement_status` is `null` for every other result.
 
 **Replays and conflicts.** Legs are compared after sorting by `selection_id`, so
 the same results in another order are the same payload. Repeating a POST with an
@@ -1268,6 +1426,13 @@ Malformed JSON returns 400 and an oversized body 413, both with
 | `ALREADY_OPTED_IN` | User already opted in |
 | `BET_ALREADY_BOUND` | Bet ID is already attached to a different reward of the same brand (409) |
 | `CURRENCY_NOT_SUPPORTED` | The opt-in currency is not a key of the profile's `max_bonus_minor` (422) |
+| `SELECTION_ALREADY_STARTED` | A prematch selection's `starts_at` has passed (422) |
+| `SELECTION_ALREADY_SETTLED` | A selection is marked `settled: true` (422) |
+| `SELECTION_TIMING_REQUIRED` | Open boosts: a selection has neither `starts_at` nor `live: true` (422) |
+| `NO_OPEN_PROFILE` | No active open profile of the brand applies to this player (422; in offers: `qualifies: false`) |
+| `PROFILE_NOT_OPEN` | The named profile is `PERSONAL` (422) |
+| `PROFILE_SEGMENT_MISMATCH` | The named profile is for a segment not in the request's `segments` (422) |
+| `PROFILE_IS_OPEN` | Personal grants (single or bulk) refuse an `OPEN` profile in the MVP (422) |
 | `RIDE_CRASHED` | Ride reached its pre-end crash boundary |
 | `RIDE_ENDED` | Ride reached end time without an earlier crash event |
 | `BET_ALREADY_LOCKED` | Bet ID is already locked for a different reward or user (409) |

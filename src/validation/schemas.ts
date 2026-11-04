@@ -40,6 +40,13 @@ export const MAX_BULK_GRANT_USERS = 500;
 export const segmentSchema = z.string().trim().min(1).max(MAX_SEGMENT_LENGTH)
   .regex(/^[A-Za-z0-9 _.:-]+$/, 'segment may only contain letters, digits, space, underscore, dot, colon and hyphen');
 
+/** PERSONAL = advance grant (carry-over); OPEN = granted at the player's click on a qualifying bet. */
+export const availabilitySchema = z.enum(['PERSONAL', 'OPEN']);
+
+/** Player classes the operator says this player belongs to (we never store membership). */
+export const MAX_REQUEST_SEGMENTS = 50;
+export const requestSegmentsSchema = z.array(segmentSchema).max(MAX_REQUEST_SEGMENTS);
+
 const rewardValiditySecondsSchema = z.number().int()
   .min(MIN_REWARD_VALIDITY_SECONDS)
   .max(MAX_REWARD_VALIDITY_SECONDS);
@@ -104,6 +111,10 @@ export const selectionSchema = z.object({
   sgp_group_id: z.string().min(1).max(100).optional(),
   eligible: z.boolean().optional(),
   ineligible_reason: z.string().max(200).optional(),
+  /** Kick-off, ISO 8601 with offset (e.g. 2026-11-04T18:00:00Z). */
+  starts_at: z.string().datetime({ offset: true }).optional(),
+  live: z.boolean().optional(),
+  settled: z.boolean().optional(),
 }).superRefine((data, ctx) => {
   if (data.selection_type === 'STANDARD' && data.sgp_group_id) {
     ctx.addIssue({
@@ -150,6 +161,7 @@ export const createRewardProfileSchema = z.object({
   max_bonus_minor: maxBonusMinorSchema,
   reward_validity_seconds: rewardValiditySecondsSchema,
   segment: segmentSchema.nullish(),
+  availability: availabilitySchema.default('PERSONAL'),
 }).refine(data => data.min_boost_pct <= data.max_boost_pct, {
   message: 'min_boost_pct must be less than or equal to max_boost_pct',
   path: ['min_boost_pct'],
@@ -192,6 +204,8 @@ export const updateRewardProfileSchema = z.object({
   is_active: z.boolean().optional(),
   /** null clears the label; absent leaves it unchanged. */
   segment: segmentSchema.nullable().optional(),
+  /** Absent leaves it unchanged. */
+  availability: availabilitySchema.optional(),
   /** Present only to reject it: a profile never changes brand. */
   brand_id: z.unknown().optional(),
 }).refine(data => data.brand_id === undefined, {
@@ -252,16 +266,11 @@ export const lockRequestSchema = z.object({
   bet_id: identifierSchema,
 });
 
-// Start ride schema (bet already placed)
-export const startRideSchema = z.object({
-  user_id: identifierSchema,
-  bet_id: identifierSchema,
-  /** Integer minor units, e.g. 1000 = 10.00 EUR. */
-  stake_minor: z.number().int().positive().max(MAX_STAKE_MINOR),
-  currency: currencySchema,
-  ticket: ticketSchema,
-}).superRefine((data, ctx) => {
-  // Settlement reports a result per selection_id, so ids must identify one selection.
+/** Settlement reports a result per selection_id, so ids must identify one selection. */
+function refineUniqueSelectionIds(
+  data: { ticket: { selections: Array<{ id: string }> } },
+  ctx: z.RefinementCtx
+): void {
   const seen = new Set<string>();
   data.ticket.selections.forEach((selection, index) => {
     if (seen.has(selection.id)) {
@@ -273,7 +282,39 @@ export const startRideSchema = z.object({
     }
     seen.add(selection.id);
   });
+}
+
+// Start ride schema (bet already placed)
+export const startRideSchema = z.object({
+  user_id: identifierSchema,
+  bet_id: identifierSchema,
+  /** Integer minor units, e.g. 1000 = 10.00 EUR. */
+  stake_minor: z.number().int().positive().max(MAX_STAKE_MINOR),
+  currency: currencySchema,
+  ticket: ticketSchema,
+}).superRefine(refineUniqueSelectionIds);
+
+/** Open boost offer: read-only "would this slip get an open boost?". */
+export const openBoostOfferSchema = z.object({
+  brand_id: brandIdSchema,
+  user_id: identifierSchema,
+  segments: requestSegmentsSchema.optional(),
+  stake_minor: z.number().int().positive().max(MAX_STAKE_MINOR).optional(),
+  currency: currencySchema.optional(),
+  ticket: ticketSchema,
 });
+
+/** Open boost opt-in: grant + opt-in on a placed bet in one transaction. */
+export const openOptInSchema = z.object({
+  brand_id: brandIdSchema,
+  user_id: identifierSchema,
+  segments: requestSegmentsSchema.optional(),
+  profile_version_id: z.string().uuid().optional(),
+  bet_id: identifierSchema,
+  stake_minor: z.number().int().positive().max(MAX_STAKE_MINOR),
+  currency: currencySchema,
+  ticket: ticketSchema,
+}).superRefine(refineUniqueSelectionIds);
 
 // Settlement schemas
 const settlementLegSchema = z.object({
@@ -339,3 +380,5 @@ export type ResettlementRequestBody = z.infer<typeof resettlementRequestSchema>;
 export type SimulationRequestBody = z.infer<typeof simulationRequestSchema>;
 export type BrandQuery = z.infer<typeof brandQuerySchema>;
 export type StartRideBody = z.infer<typeof startRideSchema>;
+export type OpenBoostOfferBody = z.infer<typeof openBoostOfferSchema>;
+export type OpenOptInBody = z.infer<typeof openOptInSchema>;

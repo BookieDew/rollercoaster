@@ -7,7 +7,11 @@ import type {
 export type { SettlementBetResult, SettlementLeg, SettlementOutcome };
 
 /** Whether a cancelled bet returned its token (null when the bet is not CANCELLED). */
-export type ReplacementStatus = 'ISSUED' | 'NOT_ISSUED_EXPIRED';
+/**
+ * Token of a cancelled bet: ISSUED; NOT_ISSUED_EXPIRED (the reward's validity had passed); NOT_ISSUED_OPEN_BOOST
+ * (the bet used an open boost: no token, the next qualifying bet gets the open boost again; owner 2026-11-04T19:55).
+ */
+export type ReplacementStatus = 'ISSUED' | 'NOT_ISSUED_EXPIRED' | 'NOT_ISSUED_OPEN_BOOST';
 
 /** One settlement revision of a lock (table bet_settlements). Money is integer minor units. */
 export interface BetSettlement {
@@ -98,17 +102,23 @@ export interface SettlementResponse {
   settled_at: string;
 }
 
-/** Replacement status is derived: a CANCELLED revision either carries a replacement or none was issued. */
+/**
+ * Replacement status is derived: a CANCELLED revision either carries a replacement or none was issued, because
+ * the bet used an open boost (`openBoost`) or else because the validity had passed.
+ */
 export function replacementStatusOf(
-  settlement: Pick<BetSettlement, 'betResult' | 'replacementRewardId'>
+  settlement: Pick<BetSettlement, 'betResult' | 'replacementRewardId'>,
+  openBoost = false
 ): ReplacementStatus | null {
   if (settlement.betResult !== 'CANCELLED') return null;
-  return settlement.replacementRewardId ? 'ISSUED' : 'NOT_ISSUED_EXPIRED';
+  if (settlement.replacementRewardId) return 'ISSUED';
+  return openBoost ? 'NOT_ISSUED_OPEN_BOOST' : 'NOT_ISSUED_EXPIRED';
 }
 
 export function toSettlementResponse(
   settlement: BetSettlement,
-  previousBonusMinor: number | null
+  previousBonusMinor: number | null,
+  openBoost = false
 ): SettlementResponse {
   return {
     settlement_id: settlement.id,
@@ -128,7 +138,7 @@ export function toSettlementResponse(
     cap_applied: settlement.capApplied,
     minimums_met: settlement.minimumsMet,
     replacement_reward_id: settlement.replacementRewardId,
-    replacement_status: replacementStatusOf(settlement),
+    replacement_status: replacementStatusOf(settlement, openBoost),
     reason: settlement.reason,
     previous_bonus_minor: previousBonusMinor,
     bonus_delta_minor: previousBonusMinor === null ? null : settlement.bonusMinor - previousBonusMinor,

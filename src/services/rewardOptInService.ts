@@ -1,14 +1,16 @@
 import { userRewardRepository, BetAlreadyBoundError, type OptInMoney } from '../db/repositories/userRewardRepository';
 import { rewardProfileRepository } from '../db/repositories/rewardProfileRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
-import { runInTransaction, Rollback, isUniqueViolation } from '../db/repositories/transaction';
+import { runInTransaction, Rollback, isUniqueViolation, type TransactionScope } from '../db/repositories/transaction';
 import type { UserReward } from '../types/userReward';
+import type { RewardProfileVersion } from '../types/rewardProfile';
 import type { Selection } from '../types/ticket';
 import { ReasonCode } from '../types/reasonCodes';
 import { LEGACY_BRAND_ID } from '../types/brand';
 import { config } from '../config';
 import { buildRideMath, toRideMathProfile } from './rideMathSnapshot';
-import { describeOdds, evaluateTicket } from './ticketEvaluation';
+import { describeOdds, evaluateTicket, type TicketEvaluation } from './ticketEvaluation';
+import { selectionTimingMessage, selectionTimingReasons, type SelectionTimingOptions } from './selectionTiming';
 import { expireGrantedReward } from './rewardExpiryService';
 
 export interface ServiceResult<T> {
@@ -17,6 +19,8 @@ export interface ServiceResult<T> {
   error?: {
     code: ReasonCode;
     message: string;
+    /** Extra public data for the error response (e.g. the reward_id of an open-boost replay). */
+    details?: Record<string, unknown>;
   };
 }
 
@@ -207,8 +211,60 @@ export async function optIn(
     };
   }
 
-  // The bonus cap is copied from the profile now, so later profile edits never
-  // change an in-flight bet.
+  // Personal opt-in checks slip timing only for the fields the caller sent; a GRANTED reward on an OPEN profile
+  // (e.g. a replacement token, or a profile switched to OPEN after the grant) gets the open-boost timing rules.
+  const plan = planEntry(profile, { stakeMinor, currency, selections }, new Date(), {
+    requireTiming: profile.availability === 'OPEN',
+  });
+  if (!plan.success || !plan.data) {
+    return { success: false, error: plan.error };
+  }
+  const entryPlan = plan.data;
+
+  try {
+    // Claim (GRANTED -> ENTERED), bet binding with the ride snapshot, and audit are atomic.
+    return await runInTransaction<ServiceResult<OptInResult>>(async (tx) => {
+      const enteredReward = await enterRewardInTransaction(reward, profile, { userId, betId, selections }, entryPlan, tx);
+      return {
+        success: true,
+        data: {
+          reward: enteredReward,
+          rideStarted: true,
+        },
+      };
+    });
+  } catch (error) {
+    if (isBetBindingError(error)) {
+      return failure(ReasonCode.BET_ALREADY_BOUND, 'Bet is already bound to a different reward');
+    }
+    throw error;
+  }
+}
+
+/** Checked ticket and money snapshot of an opt-in that may proceed. */
+export interface EntryPlan {
+  money?: OptInMoney;
+  ticket: TicketEvaluation;
+}
+
+export interface EntryInput {
+  stakeMinor?: number;
+  currency?: string;
+  selections: Selection[];
+}
+
+/**
+ * The opt-in checks shared by personal and open boosts, in order: currency supported by the profile cap map,
+ * slip timing, minimum qualifying selections, minimum exact combined odds. The bonus cap is copied from the
+ * profile now, so later profile edits never change an in-flight bet.
+ */
+export function planEntry(
+  profile: RewardProfileVersion,
+  input: EntryInput,
+  now: Date,
+  timing: SelectionTimingOptions
+): ServiceResult<EntryPlan> {
+  const { stakeMinor, currency, selections } = input;
   let money: OptInMoney | undefined;
   if (stakeMinor !== undefined && currency !== undefined) {
     const bonusCapMinor = profile.maxBonusMinor?.[currency];
@@ -219,6 +275,11 @@ export async function optIn(
       );
     }
     money = { stakeMinor, currency, bonusCapMinor };
+  }
+
+  const [timingReason] = selectionTimingReasons(selections, now, timing);
+  if (timingReason !== undefined) {
+    return failure(timingReason, selectionTimingMessage(timingReason));
   }
 
   // Validate eligibility based on ticket (bet already placed): exact combined odds.
@@ -235,6 +296,32 @@ export async function optIn(
       `Minimum combined odds of ${profile.minCombinedOdds} required, got ${describeOdds(ticket)}`
     );
   }
+  return { success: true, data: { money, ticket } };
+}
+
+export interface EntryBinding {
+  userId: string;
+  betId: string;
+  selections: Selection[];
+}
+
+/**
+ * Enters a GRANTED reward inside the caller's transaction: conditional GRANTED -> ENTERED claim, bet binding
+ * with the frozen V4 ride snapshot (the ride starts now), and the OPT_IN audit row. Throws Rollback with
+ * ALREADY_OPTED_IN when the claim loses a race, BetAlreadyBoundError (or a unique violation) when the bet is
+ * already bound in the brand. `trigger` is recorded on the audit row of open boosts only.
+ */
+export async function enterRewardInTransaction(
+  reward: UserReward,
+  profile: RewardProfileVersion,
+  binding: EntryBinding,
+  plan: EntryPlan,
+  tx: TransactionScope,
+  trigger?: 'OPEN'
+): Promise<UserReward> {
+  const { userId, betId, selections } = binding;
+  const { money, ticket } = plan;
+  const rewardId = reward.id;
 
   // Build the V4 ride from the secret seed and freeze every payout input. The ride starts now.
   const now = new Date();
@@ -259,69 +346,60 @@ export async function optIn(
     minSelectionOdds: profile.minSelectionOdds,
     minSelections: profile.minSelections,
     minCombinedOdds: profile.minCombinedOdds,
+    // Frozen marker of a bet that used an open boost (cancellation returns no token for it).
+    ...(trigger === undefined ? {} : { grantTrigger: trigger }),
   };
 
-  try {
-    // Claim (GRANTED -> ENTERED), bet binding with the ride snapshot, and audit are atomic.
-    return await runInTransaction<ServiceResult<OptInResult>>(async (tx) => {
-      const claimed = await userRewardRepository.updateStatus(rewardId, 'ENTERED', optedInAt, {
-        tx,
-        fromStatus: 'GRANTED',
-      });
-      if (!claimed) {
-        throw new Rollback(failure(ReasonCode.ALREADY_OPTED_IN, 'User has already opted into this reward'));
-      }
-
-      const enteredReward = await userRewardRepository.updateRideStart(
-        rewardId,
-        startTime,
-        endTime,
-        betId,
-        ticketSnapshot,
-        tx,
-        money
-      );
-      if (!enteredReward) {
-        throw new Rollback(failure(ReasonCode.INTERNAL_ERROR, 'Failed to start ride'));
-      }
-
-      // The audit row never carries the seed: only its SHA-256 commitment.
-      await auditLogRepository.append({
-        entityType: 'user_reward',
-        entityId: rewardId,
-        action: 'OPT_IN',
-        payload: {
-          brandId: reward.brandId ?? LEGACY_BRAND_ID,
-          userId,
-          betId,
-          stakeMinor: money?.stakeMinor,
-          currency: money?.currency,
-          bonusCapMinor: money?.bonusCapMinor,
-          optedInAt,
-          rideMode: profile.rideMode,
-          mathSnapshotVersion: rideMath.version,
-          seedCommitment: rideMath.seedCommitment,
-          durationSeconds: rideMath.rideDurationSeconds,
-          combinedOdds: ticket.combinedOddsExact,
-          ticketStrength: ticket.ticketStrength,
-        },
-      }, tx);
-
-      return {
-        success: true,
-        data: {
-          reward: enteredReward,
-          rideStarted: true,
-        },
-      };
-    });
-  } catch (error) {
-    // The application check and the unique (brand_id, bet_id) index both mean 409.
-    if (error instanceof BetAlreadyBoundError || isBetBindingViolation(error)) {
-      return failure(ReasonCode.BET_ALREADY_BOUND, 'Bet is already bound to a different reward');
-    }
-    throw error;
+  const claimed = await userRewardRepository.updateStatus(rewardId, 'ENTERED', optedInAt, {
+    tx,
+    fromStatus: 'GRANTED',
+  });
+  if (!claimed) {
+    throw new Rollback(failure(ReasonCode.ALREADY_OPTED_IN, 'User has already opted into this reward'));
   }
+
+  const enteredReward = await userRewardRepository.updateRideStart(
+    rewardId,
+    startTime,
+    endTime,
+    betId,
+    ticketSnapshot,
+    tx,
+    money
+  );
+  if (!enteredReward) {
+    throw new Rollback(failure(ReasonCode.INTERNAL_ERROR, 'Failed to start ride'));
+  }
+
+  // The audit row never carries the seed: only its SHA-256 commitment.
+  await auditLogRepository.append({
+    entityType: 'user_reward',
+    entityId: rewardId,
+    action: 'OPT_IN',
+    payload: {
+      brandId: reward.brandId ?? LEGACY_BRAND_ID,
+      userId,
+      betId,
+      stakeMinor: money?.stakeMinor,
+      currency: money?.currency,
+      bonusCapMinor: money?.bonusCapMinor,
+      optedInAt,
+      rideMode: profile.rideMode,
+      mathSnapshotVersion: rideMath.version,
+      seedCommitment: rideMath.seedCommitment,
+      durationSeconds: rideMath.rideDurationSeconds,
+      combinedOdds: ticket.combinedOddsExact,
+      ticketStrength: ticket.ticketStrength,
+      ...(trigger === undefined ? {} : { trigger }),
+    },
+  }, tx);
+
+  return enteredReward;
+}
+
+/** The application check and the unique (brand_id, bet_id) index both mean 409 BET_ALREADY_BOUND. */
+export function isBetBindingError(error: unknown): boolean {
+  return error instanceof BetAlreadyBoundError || isBetBindingViolation(error);
 }
 
 /** A unique violation on user_rewards (brand_id, bet_id) from SQLite or PostgreSQL. */
@@ -331,8 +409,8 @@ function isBetBindingViolation(error: unknown): boolean {
   return /user_rewards/.test(message) && /bet_id/.test(message);
 }
 
-function failure<T>(code: ReasonCode, message: string): ServiceResult<T> {
-  return { success: false, error: { code, message } };
+export function failure<T>(code: ReasonCode, message: string, details?: Record<string, unknown>): ServiceResult<T> {
+  return { success: false, error: details === undefined ? { code, message } : { code, message, details } };
 }
 
 export const rewardOptInService = {

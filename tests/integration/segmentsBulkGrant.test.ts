@@ -374,7 +374,7 @@ describe('Segment labels and bulk grant', () => {
         expect(await knex('user_rewards')).toHaveLength(1);
 
         const [, again] = await knex.migrate.latest();
-        expect(again).toEqual(['018_segments.ts']);
+        expect(again).toEqual(['018_segments.ts', '019_open_profiles.ts']);
       } finally {
         await cleanup();
       }

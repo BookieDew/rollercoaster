@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getQuote, lockBoost, getLock, getBoostedBet } from '../controllers/boostController';
+import { getOpenOffer, openOptIn } from '../controllers/openBoostController';
 import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -32,5 +33,17 @@ router.get('/lock/:betId', getLock);
  * Whether a bet is boosted (operator-only data for the operator's own cash-out policy)
  */
 router.get('/bets/:betId', getBoostedBet);
+
+/**
+ * POST /boost/offers
+ * Read-only: which OPEN profile would apply to this slip and whether it qualifies now
+ */
+router.post('/offers', getOpenOffer);
+
+/**
+ * POST /boost/open-opt-in
+ * The player uses an open boost on a placed bet: grant + opt-in + ride start in one transaction
+ */
+router.post('/open-opt-in', openOptIn);
 
 export default router;

@@ -17,7 +17,7 @@ import {
 } from '../computations/settlementCalculator';
 import { issueReplacementReward } from './rewardEntitlementService';
 import type { BetBoostLock } from '../types/betBoostLock';
-import type { UserReward } from '../types/userReward';
+import { usedOpenBoost, type UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import {
   replacementStatusOf,
@@ -230,18 +230,34 @@ async function previousBonusOf(settlement: BetSettlement): Promise<number | null
   return previous ? previous.bonusMinor : null;
 }
 
-async function respond(settlement: BetSettlement): Promise<ServiceResult<SettlementResponse>> {
-  return { success: true, data: toSettlementResponse(settlement, await previousBonusOf(settlement)) };
+/**
+ * Whether the settled bet used an open boost. Only a CANCELLED revision without a replacement needs it (to tell
+ * NOT_ISSUED_OPEN_BOOST from NOT_ISSUED_EXPIRED); `reward` is passed when the caller already holds it.
+ */
+async function openBoostOf(settlement: BetSettlement, reward?: UserReward): Promise<boolean> {
+  if (settlement.betResult !== 'CANCELLED' || settlement.replacementRewardId) return false;
+  if (reward) return usedOpenBoost(reward);
+  const lock = await betBoostLockRepository.findById(settlement.lockId);
+  const owner = lock ? await userRewardRepository.findById(lock.rewardId) : null;
+  return owner ? usedOpenBoost(owner) : false;
+}
+
+async function respond(settlement: BetSettlement, reward?: UserReward): Promise<ServiceResult<SettlementResponse>> {
+  return {
+    success: true,
+    data: toSettlementResponse(settlement, await previousBonusOf(settlement), await openBoostOf(settlement, reward)),
+  };
 }
 
 /** Identical normalized payload -> the stored revision; anything else -> 409. */
 async function replayOrConflict(
   existing: BetSettlement,
   payload: NormalizedPayload,
-  conflictMessage: string
+  conflictMessage: string,
+  reward?: UserReward
 ): Promise<ServiceResult<SettlementResponse>> {
   if (storedPayloadKey(existing) === payloadKey(payload)) {
-    return respond(existing);
+    return respond(existing, reward);
   }
   return failure(ReasonCode.BET_ALREADY_SETTLED, conflictMessage);
 }
@@ -251,8 +267,9 @@ function isPastValidity(reward: UserReward, now: Date): boolean {
 }
 
 /**
- * Returns the token of a cancelled bet: a replacement reward, unless the
- * original's validity has already passed (then none is issued).
+ * Returns the token of a cancelled bet: a replacement reward, unless the bet
+ * used an open boost (owner 2026-11-04T19:55: no token, the next qualifying bet
+ * gets the open boost again) or the original's validity has already passed.
  */
 async function issueReplacementIfValid(
   original: UserReward,
@@ -262,7 +279,7 @@ async function issueReplacementIfValid(
   tx: TransactionScope,
   now: Date
 ): Promise<UserReward | null> {
-  if (isPastValidity(original, now)) {
+  if (usedOpenBoost(original) || isPastValidity(original, now)) {
     return null;
   }
   return issueReplacementReward(original, { settlementId, betId, trigger }, tx, now);
@@ -331,6 +348,7 @@ function auditPayload(
   prepared: PreparedSettlement,
   settlement: BetSettlement
 ): Record<string, unknown> {
+  const openBoost = usedOpenBoost(prepared.reward);
   return {
     brandId: settlement.brandId,
     betId: settlement.betId,
@@ -350,7 +368,9 @@ function auditPayload(
     capApplied: settlement.capApplied,
     minimumsMet: settlement.minimumsMet,
     replacementRewardId: settlement.replacementRewardId,
-    replacementStatus: replacementStatusOf(settlement),
+    replacementStatus: replacementStatusOf(settlement, openBoost),
+    // Explicit on open-boost bets only, so a cancelled one shows why no token was returned.
+    ...(openBoost ? { openBoost: true } : {}),
   };
 }
 
@@ -399,7 +419,7 @@ export async function settleBet(input: SettleInput): Promise<ServiceResult<Settl
   const conflictMessage = 'Bet is already settled with a different result; use POST /api/settlement/resettle to correct it';
   const existing = await settlementRepository.findCurrentByLockId(lock.id);
   if (existing) {
-    return replayOrConflict(existing, payload, conflictMessage);
+    return replayOrConflict(existing, payload, conflictMessage, reward);
   }
 
   const settlementId = uuidv4();
@@ -421,13 +441,13 @@ export async function settleBet(input: SettleInput): Promise<ServiceResult<Settl
       }, tx);
       return settlement;
     });
-    return { success: true, data: toSettlementResponse(created, null) };
+    return { success: true, data: toSettlementResponse(created, null, usedOpenBoost(reward)) };
   } catch (error) {
     // A concurrent settlement won (lock_id, revision 1): re-read and apply the replay rule.
     if (isUniqueViolation(error)) {
       const winner = await settlementRepository.findCurrentByLockId(lock.id);
       if (winner) {
-        return replayOrConflict(winner, payload, conflictMessage);
+        return replayOrConflict(winner, payload, conflictMessage, reward);
       }
     }
     throw error;
@@ -460,7 +480,7 @@ export async function resettleBet(input: ResettleInput): Promise<ServiceResult<S
     );
   }
   if (storedPayloadKey(current) === payloadKey(payload)) {
-    return respond(current);
+    return respond(current, reward);
   }
 
   const raceMessage = 'Settlement was corrected concurrently; read the current revision and retry';
@@ -528,7 +548,10 @@ export async function resettleBet(input: ResettleInput): Promise<ServiceResult<S
   }
 
   if (result.kind === 'CREATED') {
-    return { success: true, data: toSettlementResponse(result.settlement, current.bonusMinor) };
+    return {
+      success: true,
+      data: toSettlementResponse(result.settlement, current.bonusMinor, usedOpenBoost(reward)),
+    };
   }
   if (result.kind === 'REPLACEMENT_ALREADY_USED') {
     return failure(
@@ -539,7 +562,7 @@ export async function resettleBet(input: ResettleInput): Promise<ServiceResult<S
   }
   const winner = await settlementRepository.findCurrentByLockId(lock.id);
   if (winner) {
-    return replayOrConflict(winner, payload, raceMessage);
+    return replayOrConflict(winner, payload, raceMessage, reward);
   }
   return failure(ReasonCode.BET_ALREADY_SETTLED, raceMessage);
 }

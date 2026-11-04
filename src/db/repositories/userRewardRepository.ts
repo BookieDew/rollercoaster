@@ -71,6 +71,12 @@ export async function findById(id: string, tx?: TransactionScope): Promise<UserR
   return record ? mapToEntity(record) : null;
 }
 
+/** The reward bound to a bet; a bet is identified by (brand_id, bet_id), unique on user_rewards. */
+export async function findByBet(brandId: string, betId: string): Promise<UserReward | null> {
+  const record = await db(TABLE).where({ brand_id: brandId, bet_id: betId }).first();
+  return record ? mapToEntity(record) : null;
+}
+
 /** A player is identified by (brand_id, user_id). */
 export async function findByUserId(brandId: string, userId: string, segment?: string): Promise<UserReward[]> {
   const query = db(TABLE)
@@ -232,6 +238,7 @@ function mapToEntity(record: Record<string, unknown>): UserReward {
 export const userRewardRepository = {
   create,
   findById,
+  findByBet,
   findByUserId,
   findActiveByUserId,
   updateStatus,

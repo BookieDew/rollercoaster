@@ -1,7 +1,13 @@
 import db from '../connection';
 import { toIsoTimestamp } from './columns';
 import { v4 as uuidv4 } from 'uuid';
-import type { RewardProfileVersion, CreateRewardProfileInput, UpdateRewardProfileInput } from '../../types/rewardProfile';
+import type {
+  RewardProfileVersion,
+  CreateRewardProfileInput,
+  UpdateRewardProfileInput,
+  ProfileAvailability,
+} from '../../types/rewardProfile';
+import { executorFor, type TransactionScope } from './transaction';
 import { parseBonusCapMap } from '../../money/minorUnits';
 
 const TABLE = 'reward_profile_versions';
@@ -11,6 +17,7 @@ const DEFAULT_MAX_ELIGIBILITY_SELECTION_WEIGHT = 0.75;
 const DEFAULT_MAX_ELIGIBILITY_ODDS_WEIGHT = 0.25;
 const DEFAULT_EFFECTIVE_MIN_FLOOR_RATE = 0.35;
 const DEFAULT_RIDE_MODE = 'WAVES';
+const DEFAULT_AVAILABILITY: ProfileAvailability = 'PERSONAL';
 
 export async function create(input: CreateRewardProfileInput): Promise<RewardProfileVersion> {
   const id = uuidv4();
@@ -39,6 +46,7 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
     max_bonus_minor: JSON.stringify(input.maxBonusMinor),
     reward_validity_seconds: input.rewardValiditySeconds,
     segment: input.segment ?? null,
+    availability: input.availability ?? DEFAULT_AVAILABILITY,
     checkpoint_count: INTERNAL_CHECKPOINT_COUNT,
     volatility: INTERNAL_VOLATILITY,
     is_active: true,
@@ -50,9 +58,31 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
   return mapToEntity(record);
 }
 
-export async function findById(id: string): Promise<RewardProfileVersion | null> {
-  const record = await db(TABLE).where({ id }).first();
+export async function findById(id: string, tx?: TransactionScope): Promise<RewardProfileVersion | null> {
+  const q = await executorFor(tx);
+  const record = await q(TABLE).where({ id }).first();
   return record ? mapToEntity(record) : null;
+}
+
+/**
+ * Active OPEN profile versions of a brand whose segment is null (everyone) or one of `segments`,
+ * newest first. The caller ranks them (segment match beats null).
+ */
+export async function findActiveOpen(
+  brandId: string,
+  segments: readonly string[],
+  tx?: TransactionScope
+): Promise<RewardProfileVersion[]> {
+  const q = await executorFor(tx);
+  const query = q(TABLE)
+    .where({ brand_id: brandId, is_active: true, availability: 'OPEN' })
+    .andWhere((scope) => {
+      scope.whereNull('segment');
+      if (segments.length > 0) scope.orWhereIn('segment', [...segments]);
+    })
+    .orderBy([{ column: 'created_at', order: 'desc' }, { column: 'id', order: 'desc' }]);
+  const records = await query;
+  return records.map(mapToEntity);
 }
 
 export async function findActive(brandId?: string, segment?: string): Promise<RewardProfileVersion[]> {
@@ -108,6 +138,7 @@ export async function update(id: string, input: UpdateRewardProfileInput): Promi
   if (input.maxBonusMinor !== undefined) updates.max_bonus_minor = JSON.stringify(input.maxBonusMinor);
   if (input.rewardValiditySeconds !== undefined) updates.reward_validity_seconds = input.rewardValiditySeconds;
   if (input.segment !== undefined) updates.segment = input.segment;
+  if (input.availability !== undefined) updates.availability = input.availability;
   if (input.isActive !== undefined) updates.is_active = input.isActive;
 
   await db(TABLE).where({ id }).update(updates);
@@ -154,6 +185,7 @@ function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
       ? null
       : Number(record.reward_validity_seconds),
     segment: (record.segment as string | null | undefined) ?? null,
+    availability: record.availability === 'OPEN' ? 'OPEN' : DEFAULT_AVAILABILITY,
     isActive: Boolean(record.is_active),
     createdAt: toIsoTimestamp(record.created_at),
     updatedAt: toIsoTimestamp(record.updated_at),
@@ -164,6 +196,7 @@ export const rewardProfileRepository = {
   create,
   findById,
   findActive,
+  findActiveOpen,
   findAll,
   update,
   remove,

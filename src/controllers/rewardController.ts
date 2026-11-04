@@ -11,9 +11,8 @@ import {
   brandSegmentQuerySchema,
   bulkGrantRewardSchema,
 } from '../validation/schemas';
-import { toDTO, publicEndTime, type OptInResponse, type BulkGrantRewardResponse } from '../types/userReward';
+import { toDTO, toOptInResponse, type BulkGrantRewardResponse } from '../types/userReward';
 import { createApiError } from '../middleware/errorHandler';
-import { LEGACY_BRAND_ID } from '../types/brand';
 
 /**
  * POST /rewards - Grant a reward entitlement to a user
@@ -167,17 +166,7 @@ export async function optInToReward(
       );
     }
 
-    const response: OptInResponse = {
-      reward_id: result.data.reward.id,
-      brand_id: result.data.reward.brandId ?? LEGACY_BRAND_ID,
-      status: result.data.reward.status,
-      ride_started: result.data.rideStarted,
-      stake_minor: result.data.reward.stakeMinor ?? null,
-      currency: result.data.reward.currency ?? null,
-      bonus_cap_minor: result.data.reward.bonusCapMinor ?? null,
-      end_time: publicEndTime(result.data.reward),
-    };
-    res.json(response);
+    res.json(toOptInResponse(result.data.reward, result.data.rideStarted));
   } catch (error) {
     next(error);
   }

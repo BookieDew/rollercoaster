@@ -168,7 +168,7 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
     expect(JSON.stringify([await knex('user_rewards').orderBy('id'), await knex('audit_logs').orderBy('id')]))
       .toBe(snapshot);
     const [, remaining] = await knex.migrate.latest();
-    expect(remaining).toEqual(['017_timestamps_with_time_zone.ts', '018_segments.ts']);
+    expect(remaining).toEqual(['017_timestamps_with_time_zone.ts', '018_segments.ts', '019_open_profiles.ts']);
     const [, again] = await knex.migrate.latest();
     expect(again).toEqual([]);
   });

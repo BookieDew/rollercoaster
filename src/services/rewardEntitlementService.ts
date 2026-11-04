@@ -46,7 +46,7 @@ export function createRideSeed(): string {
   return randomBytes(32).toString('hex');
 }
 
-/** Loads the profile version a grant refers to; it must exist and be active. */
+/** Loads the profile version a grant refers to; it must exist, be active and be PERSONAL. */
 async function findGrantableProfile(
   profileVersionId: string
 ): Promise<ServiceResult<RewardProfileVersion>> {
@@ -71,19 +71,32 @@ async function findGrantableProfile(
     };
   }
 
+  // MVP (owner, 2026-11-04T19:55): OPEN profiles are granted only at the player's click, never in advance.
+  if (profile.availability === 'OPEN') {
+    return {
+      success: false,
+      error: {
+        code: ReasonCode.PROFILE_IS_OPEN,
+        message: 'Open profiles cannot be granted in advance; use a PERSONAL profile',
+      },
+    };
+  }
+
   return { success: true, data: profile };
 }
 
 /**
  * Creates one reward and its GRANT audit row inside the caller's transaction.
- * The single and the bulk grant both go through here, so they apply identical rules.
+ * The single, the bulk and the open grant all go through here, so they apply identical rules.
+ * `trigger` is recorded on the audit row of open grants only ('OPEN': created at the player's click).
  */
-async function createGrantInTransaction(
+export async function createGrantInTransaction(
   profile: RewardProfileVersion,
   userId: string,
   durationSeconds: number | undefined,
   segmentOverride: string | null | undefined,
-  tx: TransactionScope
+  tx: TransactionScope,
+  trigger?: 'OPEN'
 ): Promise<UserReward> {
   // Calculate start and end times
   const now = new Date();
@@ -128,6 +141,7 @@ async function createGrantInTransaction(
       maxDurationSeconds: config.ride.maxDurationSeconds,
       // Never the seed itself (contract §1): its SHA-256 commitment.
       seedCommitment: seedCommitment(seed),
+      ...(trigger === undefined ? {} : { trigger }),
     },
   }, tx);
 

@@ -68,6 +68,14 @@ export interface UserRewardDTO {
   updated_at: string;
 }
 
+/**
+ * True when the reward was created and entered by the open-boost flow (POST /api/boost/open-opt-in). Frozen in the
+ * ticket snapshot at opt-in, so a later profile edit (OPEN <-> PERSONAL) never changes how this bet is treated.
+ */
+export function usedOpenBoost(reward: Pick<UserReward, 'ticketSnapshot'>): boolean {
+  return reward.ticketSnapshot?.grantTrigger === 'OPEN';
+}
+
 /** Ride end is revealed only once the reward can no longer be played. */
 export function publicEndTime(reward: Pick<UserReward, 'status' | 'endTime'>): string | null {
   return reward.status === 'USED' || reward.status === 'EXPIRED' ? reward.endTime : null;
@@ -128,4 +136,18 @@ export interface OptInResponse {
   bonus_cap_minor: number | null;
   /** Always null for a live ride; see publicEndTime. */
   end_time: string | null;
+}
+
+/** Response of both opt-in endpoints (personal POST /rewards/:id/opt-in and open POST /boost/open-opt-in). */
+export function toOptInResponse(reward: UserReward, rideStarted: boolean): OptInResponse {
+  return {
+    reward_id: reward.id,
+    brand_id: reward.brandId ?? LEGACY_BRAND_ID,
+    status: reward.status,
+    ride_started: rideStarted,
+    stake_minor: reward.stakeMinor ?? null,
+    currency: reward.currency ?? null,
+    bonus_cap_minor: reward.bonusCapMinor ?? null,
+    end_time: publicEndTime(reward),
+  };
 }
