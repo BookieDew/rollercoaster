@@ -11,3 +11,6 @@ dev.db
 .env
 .env.*
 !.env.example
+
+# Brand assets supplied by the owner stay local (owner, 2026-11-04)
+/public/demo/brand/

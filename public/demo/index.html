@@ -12,6 +12,7 @@
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 16c3 0 3-9 6-9s3 10 6 10 3-7 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
         <div><div class="topbar-title">Rollercoaster</div><div class="topbar-sub">Combo Boost · Demo workspace</div></div>
       </div>
+      <button type="button" class="player-view-btn" id="playerViewBtn" aria-expanded="false" aria-controls="playerSlip"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M10.5 18h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Player view</button>
       <div class="topbar-api" aria-label="API connection">
         <div class="connection-field"><label for="apiBase">API</label><input id="apiBase" placeholder="Same origin" value="" spellcheck="false" /></div>
         <div class="connection-field"><label for="apiKey">Key</label><input id="apiKey" placeholder="API key" value="dev-secret-key" spellcheck="false" autocomplete="off" /></div>
@@ -279,6 +280,7 @@
     </main>
 
     <script src="./ride-observer.js"></script>
+    <script src="./player-slip.js"></script>
     <script>
       const ride = new RideObserver.ObservedRide();
       const state = {
@@ -290,6 +292,7 @@
         responseSequence: 0,
         directionTimer: null,
       };
+      let slip = null; // player betslip view, mounted after the console is wired
 
       const responseBox = document.getElementById('responseBox');
       const rideGrid = document.getElementById('rideGrid');
@@ -323,6 +326,7 @@
       function setResponse(payload) {
         responseBox.textContent = JSON.stringify(payload, null, 2);
         updateModelPanel(payload);
+        slip?.observe(payload);
       }
 
       function announce(message, warning = false) {
@@ -788,6 +792,7 @@
         document.getElementById('rideDirectionArrow').textContent = ({ up: '↑', down: '↓', flat: '→', none: '—' })[direction];
         document.getElementById('rideDirectionText').textContent = label;
         if (direction !== 'none') state.directionTimer = setTimeout(renderDirection, Math.max(1, 801 - (Date.now() - ride.lastAcceptedAt)));
+        slip?.render();
       }
 
       function updateControls() {
@@ -807,6 +812,7 @@
         document.getElementById('lockBoost').disabled = busy || !['running', 'uncertain'].includes(ride.phase);
         document.getElementById('lockBoost').textContent = ride.phase === 'uncertain' ? 'Retry Stop (Lock)' : ride.phase === 'locking' ? 'Confirming lock…' : 'Stop Ride (Lock)';
         ['apiBase', 'apiKey', 'userId', 'betId'].forEach((id) => document.getElementById(id).disabled = active || busy);
+        slip?.render();
       }
 
       function stopPolling() {
@@ -1027,6 +1033,14 @@
         updateOddsPreview();
       }
       setAutoQuote(true);
+      slip = PlayerSlip.mount({
+        ride,
+        state,
+        rows: readSelectionRowsState,
+        parseMinorAmount,
+        generateBetId,
+        summary: () => ({ text: rideSummary.textContent, warning: rideSummary.dataset.warning === 'true' }),
+      });
       updateControls();
 
     </script>

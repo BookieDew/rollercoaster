@@ -30,15 +30,17 @@ const html = fs.readFileSync('public/demo/index.html', 'utf8');
 const scripts = [...html.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .filter((match) => !(match[1] && /\bsrc=/.test(match[1])));
 scripts.forEach((match, index) => new vm.Script(match[2], { filename: `inline-${index}` }));
-new vm.Script(fs.readFileSync('public/demo/ride-observer.js', 'utf8'), { filename: 'ride-observer.js' });
-console.log(`${scripts.length} inline script(s) and ride-observer.js parse`);
+for (const file of ['ride-observer.js', 'player-slip.js']) {
+  new vm.Script(fs.readFileSync(`public/demo/${file}`, 'utf8'), { filename: file });
+}
+console.log(`${scripts.length} inline script(s), ride-observer.js and player-slip.js parse`);
 JS
 }
 
 run typecheck npx tsc --noEmit -p tsconfig.json
 run tests npx jest --coverage --silent --coverageReporters=text-summary --coverageDirectory="$LOG_DIR/coverage"
 run build npm run build
-run observer node --test tests/ui/ride-observer.test.cjs
+run observer node --test tests/ui/ride-observer.test.cjs tests/ui/player-slip.test.cjs
 run demo-syntax demo_syntax
 
 grep -E '^(Tests:|Statements|Branches|Functions|Lines)' "$LOG_DIR/tests.log" | sed 's/^/  /'

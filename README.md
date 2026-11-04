@@ -71,6 +71,10 @@ npm run dev              # http://localhost:3000, restarts on change
 - Health check: `GET http://localhost:3000/health`
 - Demo UI: <http://localhost:3000/demo/> (enabled by default in development; the
   development API key `dev-secret-key` is pre-filled)
+- Player view: the "Player view" button in the demo header slides out a phone-sized bet slip built from the current
+  setup (Place bet, Start boost ride, Stop to lock). It uses the console's own ride state; boost and odds shown are
+  server values. Optional local branding goes in `public/demo/brand/` (`brand.css`, `logo.svg|png`; git-ignored);
+  open `/demo/?brand=1` once to load it (`?brand=0` to stop).
 - Optional sample profiles: `npm run seed`. The seed **deletes existing data** and
   refuses to run with `NODE_ENV=production`.
 
