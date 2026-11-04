@@ -138,3 +138,39 @@ test('sparkDomain fits observed boosts with a margin, min span 1 pp, floor 0', (
   d = slip.sparkDomain([]);
   assert.equal(d.min, 0); assert.ok(d.max > d.min);
 });
+
+test('open-boost reason labels are readable and unknown codes stay raw', () => {
+  for (const code of ['NO_OPEN_PROFILE', 'PROFILE_NOT_OPEN', 'PROFILE_SEGMENT_MISMATCH', 'PROFILE_IS_OPEN', 'SELECTION_ALREADY_STARTED',
+    'SELECTION_ALREADY_SETTLED', 'SELECTION_TIMING_REQUIRED', 'NOT_ISSUED_OPEN_BOOST']) {
+    const label = slip.reasonLabel(code);
+    assert.ok(label && !label.includes('_') && /[a-z]/.test(label), code);
+  }
+  assert.equal(slip.reasonLabel('SOMETHING_ELSE'), null);
+  assert.equal(slip.reasonLabel('toString'), null);
+  assert.equal(slip.reasonLabel(undefined), null);
+});
+
+test('match timing fields: prematch +2h, passed -5min, live flag', () => {
+  const now = Date.parse('2026-11-04T12:00:00.000Z');
+  assert.deepEqual(slip.timingFields('prematch', now), { starts_at: '2026-11-04T14:00:00.000Z' });
+  assert.deepEqual(slip.timingFields('passed', now), { starts_at: '2026-11-04T11:55:00.000Z' });
+  assert.deepEqual(slip.timingFields('live', now), { live: true });
+  assert.deepEqual(slip.timingFields('anything else', now), { starts_at: '2026-11-04T14:00:00.000Z' });
+});
+
+test('player groups are trimmed, deduplicated and validated', () => {
+  assert.deepEqual(slip.parseGroups(' VIP , high roller,,VIP '), ['VIP', 'high roller']);
+  assert.deepEqual(slip.parseGroups(''), []);
+  assert.deepEqual(slip.parseGroups(undefined), []);
+  assert.throws(() => slip.parseGroups('VIP, bad/label'), /Player groups/);
+  assert.throws(() => slip.parseGroups('x'.repeat(65)), /Player groups/);
+});
+
+test('offer line says qualifies, or the readable reason, and never a boost size', () => {
+  assert.deepEqual(slip.offerLine({ qualifies: true, reason_code: 'ELIGIBLE' }), { state: 'yes', text: 'This bet qualifies for a boost' });
+  const no = slip.offerLine({ qualifies: false, reason_code: 'SELECTION_ALREADY_STARTED' });
+  assert.equal(no.state, 'no');
+  assert.match(no.text, /kicked off/);
+  assert.match(slip.offerLine({ qualifies: false, reason_code: 'UNKNOWN_CODE' }).text, /UNKNOWN_CODE/);
+  assert.match(slip.offerLine(null).text, /does not qualify/);
+});

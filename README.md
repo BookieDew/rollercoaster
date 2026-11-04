@@ -73,6 +73,9 @@ npm run dev              # http://localhost:3000, restarts on change
   development API key `dev-secret-key` is pre-filled)
 - Profile card: pick a saved profile (filter by group label) or create a new one with an optional group label; a granted
   reward shows its group.
+- Open boosts: set a profile's Availability to "Open to all players"; there is no Grant Reward step. Check eligibility asks
+  `POST /api/boost/offers`, Start ride calls `POST /api/boost/open-opt-in`, and the player slip says whether the bet qualifies
+  and shows "Use boost" after Place bet. Player groups and Match timing (prematch, live, kick-off passed) apply to both flows.
 - Player view: the "Player view" button in the demo header slides out a phone-sized bet slip built from the current
   setup (Place bet, Start boost ride, Stop to lock). It uses the console's own ride state; boost and odds shown are
   server values. Optional local branding goes in `public/demo/brand/` (`brand.css`, `logo.svg|png`; git-ignored);

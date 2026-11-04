@@ -60,6 +60,10 @@ PTY alive avoids the CLI browser daemon being terminated with its parent.
   View JSON button, payload retention, all eight Calculation details readouts and
   scrollable ancestors for default setup, expanded 12-leg SGP/preview, and open
   full terminal JSON. Wheel input over JSON must move the document.
+- `open-boost.js`: open-boost flow (UI-6): the Availability select, an open profile with no grant step, player groups and
+  match timing on every selection, the slip's "qualifies" line (debounced, latest answer wins, failure claims nothing),
+  Place bet without a grant, "Use boost" with a lost response recovered by the 409, the ride and the lock, the
+  "Kick-off passed" refusal, and 390px geometry.
 - `modern-high-boost.js`: a real allowed 1,000% boost and lock, verifying all
   y-axis tick glyphs fit inside the SVG at 375px and 1440px.
 

@@ -185,6 +185,13 @@
                 <label for="profileSegment">Group label</label>
                 <input id="profileSegment" maxlength="64" placeholder="optional, e.g. VIP" spellcheck="false" autocomplete="off" title="Optional operator label, 1-64 chars: letters, digits, space and _ . : -" />
               </div>
+              <div class="field field-wide">
+                <label for="availability">Availability</label>
+                <select id="availability" title="Personal: granted to chosen players in advance. Open: no grant; the player uses it on a qualifying placed bet.">
+                  <option value="PERSONAL">Personal (granted in advance)</option>
+                  <option value="OPEN">Open to all players</option>
+                </select>
+              </div>
               <div class="field">
                 <label for="maxBonus">Max bonus</label>
                 <input id="maxBonus" inputmode="decimal" value="500.00" title="Bonus cap in the Currency chosen in step 02; sent as whole minor units" autocomplete="off" />
@@ -233,11 +240,28 @@
               <div class="field"><button class="ghost" id="applySelectionCount">Build Rows</button></div>
             </div>
 
+            <div class="grid ticket-identity ticket-identity-open">
+              <div class="field">
+                <label for="playerGroups">Player groups</label>
+                <input id="playerGroups" placeholder="optional, e.g. VIP, high roller" spellcheck="false" autocomplete="off" title="Comma-separated. Sent as segments with open-boost calls: the operator says which groups this player is in." />
+              </div>
+              <div class="field">
+                <label for="matchTiming">Match timing</label>
+                <select id="matchTiming" title="Sent on every selection: kick-off time or live flag">
+                  <option value="prematch">Prematch (kick-off in 2 h)</option>
+                  <option value="live">Live</option>
+                  <option value="passed">Kick-off passed</option>
+                </select>
+              </div>
+            </div>
+
             <div class="actions">
               <button id="grantReward">Grant Reward</button>
               <button class="ghost" id="precheckEligibility">Precheck Eligibility</button>
               <a class="ticket-ride-link" href="#rideWorkspace">View ride ↑</a>
             </div>
+
+            <p class="open-note" id="openBoostNote" role="status" hidden>Open boost: granted when the player uses it</p>
 
             <div class="meta">
               <span class="tag">Reward ID</span>
@@ -316,6 +340,9 @@
         responseSequence: 0,
         directionTimer: null,
       };
+      state.activeProfile = null; // {id, availability, segment} of the profile in step 01
+      state.startable = false;
+      state.autoGroups = '';
       let slip = null; // player betslip view, mounted after the console is wired
 
       const responseBox = document.getElementById('responseBox');
@@ -422,8 +449,37 @@
         }).finally(() => clearTimeout(timeout));
       }
 
+      // Every selection carries the chosen match timing (starts_at or live), in both flows.
       function buildTicket() {
-        return { selections: parseSelectionsFromRows() };
+        const timing = PlayerSlip.timingFields(getValue('matchTiming'), Date.now());
+        return { selections: parseSelectionsFromRows().map((selection) => ({ ...selection, ...timing })) };
+      }
+
+      function activeProfileInfo() {
+        const id = document.getElementById('profileId').textContent.trim();
+        return id !== 'n/a' && state.activeProfile && state.activeProfile.id === id ? state.activeProfile : null;
+      }
+      function openProfileActive() { return activeProfileInfo()?.availability === 'OPEN'; }
+      function setActiveProfile(p) {
+        state.activeProfile = { id: p.id, availability: p.availability === 'OPEN' ? 'OPEN' : 'PERSONAL', segment: p.segment || null };
+        // Player groups follow the profile's own group; text the operator typed is never overwritten by a missing one.
+        const groups = document.getElementById('playerGroups');
+        if (p.segment) { groups.value = p.segment; state.autoGroups = p.segment; }
+        else if (state.autoGroups && groups.value === state.autoGroups) { groups.value = ''; state.autoGroups = ''; }
+      }
+      // Body shared by the open-boost calls: brand, player, player groups (segments) and the timed ticket.
+      function openRequestBase() {
+        const body = { brand_id: getValue('brandId').trim(), user_id: getValue('userId'), ticket: buildTicket() };
+        const segments = PlayerSlip.parseGroups(getValue('playerGroups'));
+        if (segments.length) body.segments = segments;
+        return body;
+      }
+      // Background offer for the player slip: optional stake and currency are sent only when they are valid; never shown raw.
+      function fetchSlipOffer() {
+        const body = openRequestBase();
+        try { body.stake_minor = parseMinorAmount(getValue('stake'), 'Stake'); } catch (e) { /* omitted */ }
+        try { body.currency = currencyCode(); } catch (e) { /* omitted */ }
+        return apiFetch('/api/boost/offers', 'POST', body);
       }
 
       function parseSelectionsFromRows() {
@@ -825,13 +881,18 @@
         const workspace = document.getElementById('rideWorkspace');
         workspace.dataset.phase = ride.phase;
         workspace.dataset.empty = String(ride.samples.length === 0);
-        document.getElementById('rideStateLabel').textContent = ({ running: 'Live', locking: 'Locking', uncertain: 'Needs attention', locked: 'Locked', crashed: 'Crashed', ended: 'Ended' })[ride.phase] || (state.readyToStart ? 'Ready' : 'Not started');
+        document.getElementById('rideStateLabel').textContent = ({ running: 'Live', locking: 'Locking', uncertain: 'Needs attention', locked: 'Locked', crashed: 'Crashed', ended: 'Ended' })[ride.phase] || (state.startable ? 'Ready' : 'Not started');
         document.getElementById('rideMetricLabel').textContent = ride.final ? ({ locked: 'Locked boost', crashed: 'Crashed boost', ended: 'Ended boost' })[ride.phase] : 'Current boost';
         const active = ['running', 'locking', 'uncertain'].includes(ride.phase);
+        // Open profile: no grant step; Start is ready while no ride is bound to the current Bet ID.
+        const open = openProfileActive();
+        state.startable = open ? !ride.identity || ride.identity.bet_id !== getValue('betId') : state.readyToStart;
+        document.getElementById('openBoostNote').hidden = !open;
+        document.getElementById('grantReward').title = open ? 'Open boosts are granted when the player uses them' : '';
         document.getElementById('createProfile').disabled = busy || active;
-        document.getElementById('grantReward').disabled = busy || active || document.getElementById('profileId').textContent === 'n/a';
-        document.getElementById('precheckEligibility').disabled = busy || active || document.getElementById('rewardId').textContent === 'n/a';
-        document.getElementById('startRide').disabled = busy || active || !state.readyToStart;
+        document.getElementById('grantReward').disabled = busy || active || open || document.getElementById('profileId').textContent === 'n/a';
+        document.getElementById('precheckEligibility').disabled = busy || active || (open ? false : document.getElementById('rewardId').textContent === 'n/a');
+        document.getElementById('startRide').disabled = busy || active || !state.startable;
         document.getElementById('quoteOnce').disabled = busy || ride.phase !== 'running' || !!state.quoteRequest;
         document.getElementById('lockBoost').disabled = busy || !['running', 'uncertain'].includes(ride.phase);
         document.getElementById('lockBoost').textContent = ride.phase === 'uncertain' ? 'Retry Stop (Lock)' : ride.phase === 'locking' ? 'Confirming lock…' : 'Stop Ride (Lock)';
@@ -909,7 +970,7 @@
         state.pendingAction = name;
         updateControls();
         try { await work(); }
-        catch (err) { setResponse(err.payload || { error: err.message }); announce(err.payload?.message || err.message, true); }
+        catch (err) { setResponse(err.payload || { error: err.message }); announce(PlayerSlip.reasonLabel(err.payload?.code) || err.payload?.message || err.message, true); }
         finally { state.pendingAction = null; updateControls(); }
       }
 
@@ -930,7 +991,7 @@
       function pickerNote(text) { document.getElementById('profilePickerNote').textContent = text; }
 
       function profileLabel(p) {
-        return `${p.name} · ${p.segment || 'no group'} · ${p.ride_mode} · ${String(p.id).slice(0, 8)}`;
+        return `${p.name} · ${p.segment || 'no group'} · ${p.availability === 'OPEN' ? 'open to all' : 'personal'} · ${p.ride_mode} · ${String(p.id).slice(0, 8)}`;
       }
 
       function renderProfilePicker(selectId) {
@@ -972,6 +1033,7 @@
           document.getElementById(inputId).value = p[key] === null || p[key] === undefined ? '' : p[key];
         }
         document.getElementById('profileSegment').value = p.segment || '';
+        document.getElementById('availability').value = p.availability === 'OPEN' ? 'OPEN' : 'PERSONAL';
         const days = Number(p.reward_validity_seconds) / 86400;
         if (Number.isFinite(days) && days > 0) document.getElementById('validityDays').value = String(Number(days.toFixed(6)));
         let note = `Loaded "${p.name}".`;
@@ -985,6 +1047,7 @@
         }
         pickerNote(note);
         setText('profileId', p.id);
+        setActiveProfile(p);
         document.getElementById('profileDirty').hidden = true;
         profilePicker.applying = false;
         updateControls();
@@ -997,7 +1060,7 @@
       document.getElementById('profileGroupFilter').addEventListener('change', () => renderProfilePicker());
       document.getElementById('refreshProfiles').addEventListener('click', () => loadProfiles());
       document.getElementById('brandId').addEventListener('change', () => loadProfiles());
-      document.querySelectorAll('#profileName, #minSelections, #minCombinedOdds, #minSelectionOdds, #minBoostPct, #maxBoostPct, #maxBoostMinSelections, #maxBoostMinCombinedOdds, #maxEligibilitySelectionWeight, #maxEligibilityOddsWeight, #effectiveMinFloorRate, #rideMode, #profileSegment, #validityDays, #maxBonus').forEach((el) => {
+      document.querySelectorAll('#profileName, #minSelections, #minCombinedOdds, #minSelectionOdds, #minBoostPct, #maxBoostPct, #maxBoostMinSelections, #maxBoostMinCombinedOdds, #maxEligibilitySelectionWeight, #maxEligibilityOddsWeight, #effectiveMinFloorRate, #rideMode, #profileSegment, #availability, #validityDays, #maxBonus').forEach((el) => {
         const mark = () => { if (!profilePicker.applying && document.getElementById('savedProfile').value) document.getElementById('profileDirty').hidden = false; };
         el.addEventListener('input', mark); el.addEventListener('change', mark);
       });
@@ -1024,6 +1087,7 @@
           brand_id: getValue('brandId').trim(),
           max_bonus_minor: { [currencyCode()]: parseMinorAmount(getValue('maxBonus'), 'Max bonus') },
           reward_validity_seconds: validitySeconds(),
+          availability: getValue('availability'),
         };
         const segment = getValue('profileSegment').trim();
         if (segment) {
@@ -1033,9 +1097,10 @@
 
         const data = await apiFetch('/api/profiles', 'POST', payload);
         setText('profileId', data.id);
+        setActiveProfile(data);
         await loadProfiles(data.id);
         setResponse(data);
-        announce('Profile created. Grant a reward to use it; existing ticket inputs are retained.');
+        announce(data.availability === 'OPEN' ? 'Open profile created. Check eligibility or start the ride; the reward is granted when the boost is used.' : 'Profile created. Grant a reward to use it; existing ticket inputs are retained.');
       }));
 
       document.getElementById('grantReward').addEventListener('click', () => action('grant', async () => {
@@ -1050,6 +1115,16 @@
       }));
 
       document.getElementById('precheckEligibility').addEventListener('click', () => action('precheck', async () => {
+        if (openProfileActive()) {
+          // Open boosts have no reward yet: ask the offers endpoint whether this ticket would get the open boost.
+          const body = { ...openRequestBase(), stake_minor: parseMinorAmount(getValue('stake'), 'Stake'), currency: currencyCode() };
+          const offer = await apiFetch('/api/boost/offers', 'POST', body);
+          setResponse(offer);
+          const line = PlayerSlip.offerLine(offer);
+          const other = offer.qualifies && offer.profile && offer.profile.profile_version_id !== state.activeProfile.id;
+          announce(offer.qualifies ? `Qualifies for a boost.${other ? ' The server would pick a different open profile than the one in step 01; Start ride uses the one in step 01.' : ''}` : line.text.replace('No boost on this bet: ', 'Does not qualify: '), !offer.qualifies || !!other);
+          return;
+        }
         const rewardId = document.getElementById('rewardId').textContent.trim();
         const data = await apiFetch(`/api/rewards/${rewardId}/eligibility`, 'POST', { user_id: getValue('userId'), ticket: buildTicket() });
         setResponse(data);
@@ -1057,23 +1132,41 @@
       }));
 
       document.getElementById('startRide').addEventListener('click', () => action('start', async () => {
+        const open = openProfileActive();
         const rewardId = document.getElementById('rewardId').textContent.trim();
         if (!getValue('betId')) document.getElementById('betId').value = generateBetId();
-        const identity = { user_id: getValue('userId'), reward_id: rewardId, bet_id: getValue('betId') };
+        const identity = { user_id: getValue('userId'), reward_id: open ? null : rewardId, bet_id: getValue('betId') };
         let data;
         let recovered = false;
         try {
-          data = await apiFetch(`/api/rewards/${rewardId}/opt-in`, 'POST', {
-            user_id: identity.user_id,
-            bet_id: identity.bet_id,
-            stake_minor: parseMinorAmount(getValue('stake'), 'Stake'),
-            currency: currencyCode(),
-            ticket: buildTicket(),
-          });
+          if (open) {
+            // Open boost: the reward is created and entered in this one call, for the profile in step 01.
+            data = await apiFetch('/api/boost/open-opt-in', 'POST', {
+              ...openRequestBase(),
+              profile_version_id: state.activeProfile.id,
+              bet_id: identity.bet_id,
+              stake_minor: parseMinorAmount(getValue('stake'), 'Stake'),
+              currency: currencyCode(),
+            });
+            identity.reward_id = data.reward_id;
+          } else {
+            data = await apiFetch(`/api/rewards/${rewardId}/opt-in`, 'POST', {
+              user_id: identity.user_id,
+              bet_id: identity.bet_id,
+              stake_minor: parseMinorAmount(getValue('stake'), 'Stake'),
+              currency: currencyCode(),
+              ticket: buildTicket(),
+            });
+          }
         } catch (error) {
           // A lost opt-in response can leave the server ride running. Recover only
           // when an authoritative quote confirms this exact reward/user/bet.
           if (error.payload && error.payload.code !== 'ALREADY_OPTED_IN') throw error;
+          if (open) {
+            // The same bet already uses an open boost: the 409 names its reward.
+            identity.reward_id = error.payload?.details?.reward_id;
+            if (!identity.reward_id) throw error;
+          }
           data = await apiFetch('/api/boost/quote', 'POST', identity);
           const confirmed = new RideObserver.ObservedRide();
           confirmed.start(identity);
@@ -1083,6 +1176,10 @@
         cancelQuote();
         ride.start(identity);
         state.readyToStart = false;
+        if (open) {
+          setText('rewardId', identity.reward_id);
+          setText('rewardSegment', state.activeProfile.segment || 'none');
+        }
         setResponse(data);
         if (recovered) ride.accept(data, ride.token());
         renderRide();
@@ -1095,6 +1192,11 @@
       document.getElementById('quoteOnce').addEventListener('click', requestQuote);
       document.getElementById('toggleAutoQuote').addEventListener('click', () => setAutoQuote(!state.autoQuote));
       document.getElementById('applySelectionCount').addEventListener('click', buildSelectionRows);
+      document.getElementById('betId').addEventListener('input', updateControls);
+      // A refusal left in the summary belongs to the old timing or groups; clear it when they change.
+      ['matchTiming', 'playerGroups'].forEach((id) => document.getElementById(id).addEventListener('change', () => {
+        if (rideSummary.dataset.warning === 'true' && ride.phase === 'idle' && !state.pendingAction) announce('Ticket inputs changed. Check eligibility or start the ride.');
+      }));
       document.getElementById('minSelectionOdds').addEventListener('input', refreshSelectionRowStates);
 
       document.getElementById('lockBoost').addEventListener('click', async () => {
@@ -1155,6 +1257,9 @@
         rows: readSelectionRowsState,
         parseMinorAmount,
         generateBetId,
+        isOpen: openProfileActive,
+        profileKey: () => (state.activeProfile ? state.activeProfile.id : ''),
+        offer: fetchSlipOffer,
         summary: () => ({ text: rideSummary.textContent, warning: rideSummary.dataset.warning === 'true' }),
       });
       updateControls();

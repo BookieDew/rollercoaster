@@ -159,6 +159,52 @@
     return { min, max };
   }
 
+  // ---------- open boosts: readable reasons, match timing, player groups (pure) ----------
+  const REASON_LABELS = {
+    NO_OPEN_PROFILE: 'No open boost applies to this player right now.',
+    PROFILE_NOT_OPEN: 'This profile is personal, not open to all players.',
+    PROFILE_SEGMENT_MISMATCH: 'This profile is for a different player group.',
+    PROFILE_IS_OPEN: 'Open profiles are not granted in advance; the player uses them on a placed bet.',
+    SELECTION_ALREADY_STARTED: 'A match on this slip has already kicked off.',
+    SELECTION_ALREADY_SETTLED: 'A match on this slip is already settled.',
+    SELECTION_TIMING_REQUIRED: 'Every selection needs a kick-off time or a live flag.',
+    NOT_ISSUED_OPEN_BOOST: 'No replacement token: a cancelled open-boost bet returns none.',
+    MIN_SELECTIONS_NOT_MET: 'Not enough qualifying selections.',
+    MIN_COMBINED_ODDS_NOT_MET: 'The combined odds are too low.',
+    CURRENCY_NOT_SUPPORTED: 'This profile has no cap for the chosen currency.',
+  };
+  /** Readable text for a reason code; null for codes this demo has no label for (callers keep the raw text). */
+  function reasonLabel(code) { return Object.prototype.hasOwnProperty.call(REASON_LABELS, code) ? REASON_LABELS[code] : null; }
+
+  const TIMING_MODES = ['prematch', 'live', 'passed'];
+  /** Slip timing fields for every selection: prematch = kick-off in 2 h, passed = 5 min ago, live = live flag. */
+  function timingFields(mode, nowMs) {
+    if (mode === 'live') return { live: true };
+    const offset = mode === 'passed' ? -5 * 60 * 1000 : 2 * 60 * 60 * 1000;
+    return { starts_at: new Date(nowMs + offset).toISOString() };
+  }
+
+  const GROUP_PATTERN = /^[A-Za-z0-9 _.:-]{1,64}$/;
+  /** "VIP, high roller" to ["VIP", "high roller"]: trimmed, deduplicated, empty entries dropped. Throws on a bad label. */
+  function parseGroups(text) {
+    const groups = [];
+    for (const part of String(text || '').split(',')) {
+      const group = part.trim();
+      if (!group) continue;
+      if (!GROUP_PATTERN.test(group)) throw new Error('Player groups: 1-64 characters each (letters, digits, space and _ . : -), separated by commas.');
+      if (!groups.includes(group)) groups.push(group);
+    }
+    if (groups.length > 50) throw new Error('Player groups: at most 50.');
+    return groups;
+  }
+
+  /** Short slip line for an offers response: {state: 'yes' | 'no', text}. Never mentions a boost size. */
+  function offerLine(offer) {
+    if (offer && offer.qualifies === true) return { state: 'yes', text: 'This bet qualifies for a boost' };
+    const reason = offer && offer.reason_code;
+    return { state: 'no', text: `No boost on this bet: ${reasonLabel(reason) || reason || 'it does not qualify'}` };
+  }
+
   // ---------- view ----------
   const ICONS = {
     close: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
@@ -191,6 +237,7 @@
         <div class="slip-burst" data-s="burst" aria-hidden="true"></div>
         <div class="slip-boost-top"><h3 data-s="boostTitle">Boost ride</h3><span class="slip-info" aria-hidden="true">i</span></div>
         <p class="slip-boost-sub" data-s="boostSub"></p>
+        <p class="slip-offer" data-s="offer" data-state="pending" role="status" hidden></p>
         <div class="slip-locked" data-show="locked"><span class="slip-locked-pct" data-s="lockedPct">+0.00% locked</span></div>
         <button type="button" class="slip-start" data-show="placed" data-s="start">Start boost ride</button>
         <p class="slip-note" data-s="note" role="status" hidden></p>
@@ -273,7 +320,7 @@
 
     const model = {
       open: false, placed: false, placedBetId: null, placing: false,
-      precheck: null, server: null, identity: null, legsSignature: null, lastGroup: null, brandProbed: false, closeTimer: null,
+      precheck: null, offerKey: null, offerState: null, offerTimer: null, offerSeq: 0, server: null, identity: null, legsSignature: null, lastGroup: null, brandProbed: false, closeTimer: null,
       stageView: null, resultTimer: null, outcome: null, srAt: 0, srText: '',
     };
     const RS = globalThis.RideStage || null;
@@ -307,6 +354,12 @@
     const signatureOf = (legs) => legs.map((leg) => `${leg.position}:${leg.odds}:${leg.kind}:${leg.counted}`).join('|');
     const isActive = () => ['running', 'locking', 'uncertain'].includes(ride.phase);
     const isFinal = () => ['locked', 'crashed', 'ended'].includes(ride.phase);
+    const isOpen = () => !!(deps.isOpen && deps.isOpen());
+    /** Everything an offers answer depends on: a change of any of these asks the server again. */
+    const offerKeyNow = () => JSON.stringify([
+      setupValue('brandId'), setupValue('userId'), deps.profileKey ? deps.profileKey() : '', setupValue('playerGroups'),
+      setupValue('matchTiming'), setupValue('stake'), setupValue('currency'), deps.rows(),
+    ]);
 
     // ----- server values (only what responses carry) -----
     function syncIdentity() {
@@ -320,6 +373,11 @@
       const rowsSignature = signatureOf(currentLegs());
       const isRide = 'current_boost_pct' in data || 'lock_id' in data || 'ride_started' in data;
       const odds = data.combined_odds ?? data.qualifying_odds;
+      if (!isRide && typeof data.qualifies === 'boolean') {
+        // Open-boost offer (the console's own check): same role as a precheck for this ticket.
+        model.precheck = { eligible: data.qualifies, reason: data.qualifies ? null : data.reason_code || null, combinedOdds: data.combined_odds ?? null, signature: rowsSignature, key: offerKeyNow() };
+        return;
+      }
       if (!isRide && typeof data.eligible === 'boolean' && odds !== undefined) {
         model.precheck = { eligible: data.eligible, reason: data.reason_code || null, combinedOdds: odds, signature: rowsSignature };
         return;
@@ -353,7 +411,7 @@
     }
     function knownOdds(legs, active) {
       if (active && model.server?.combinedOdds !== undefined) return { value: model.server.combinedOdds, server: true };
-      if (model.precheck && model.precheck.signature === signatureOf(legs)) return { value: model.precheck.combinedOdds, server: true };
+      if (model.precheck && model.precheck.combinedOdds != null && model.precheck.signature === signatureOf(legs)) return { value: model.precheck.combinedOdds, server: true };
       const product = productOdds(legs);
       return { value: product, server: false };
     }
@@ -413,17 +471,36 @@
       // Boost card. The player is never shown a maximum or ceiling; the stage carries the live numbers.
       const precheckBlocks = model.precheck && model.precheck.eligible === false && model.precheck.signature === signatureOf(legs);
       el.boostTitle.textContent = { draft: 'Boost ride', placed: 'Boost ride', live: 'Boost ride live', locked: 'Boost locked', over: 'No boost this time' }[group];
+      const open = isOpen();
       el.boostSub.textContent = {
-        draft: 'Place your bet, then start the boost ride and tap Stop to lock your boost.',
-        placed: 'Bet placed. Start the ride, then tap Stop to lock the boost.',
+        draft: open ? 'Place your bet, then tap Use boost to start the boost ride and tap Stop to lock your boost.' : 'Place your bet, then start the boost ride and tap Stop to lock your boost.',
+        placed: open ? 'Bet placed. Tap Use boost to start the ride, then tap Stop to lock the boost.' : 'Bet placed. Start the ride, then tap Stop to lock the boost.',
         live: 'Tap Stop to lock this boost. If the ride crashes first, there is no boost.',
         locked: 'Your boost is locked on this bet.',
         over: ride.phase === 'crashed' ? 'The ride crashed before you stopped. Your odds are unchanged.' : 'The ride ended before you stopped. Your odds are unchanged.',
       }[group];
       if (group === 'locked') el.lockedPct.textContent = `+${(ride.final.boost * 100).toFixed(2)}% locked`;
-      el.start.disabled = !!state.pendingAction || !state.readyToStart || !!precheckBlocks;
+      el.start.textContent = open ? 'Use boost' : 'Start boost ride';
+      el.start.disabled = !!state.pendingAction || !(state.startable ?? state.readyToStart) || !!precheckBlocks;
       const summary = deps.summary();
-      const warning = summary.warning && summary.text ? summary.text : precheckBlocks && group === 'placed' ? `This ticket is not eligible for a boost (${model.precheck.reason || 'see console'}).` : '';
+      const blockText = open ? `This bet does not qualify for a boost: ${reasonLabel(model.precheck?.reason) || model.precheck?.reason || 'see console'}` : `This ticket is not eligible for a boost (${model.precheck?.reason || 'see console'}).`;
+      const warning = summary.warning && summary.text ? summary.text : precheckBlocks && group === 'placed' ? blockText : '';
+
+      // Open boosts: the draft slip says whether this bet qualifies (server answer, debounced; a failure claims nothing).
+      el.offer.hidden = !(open && group === 'draft');
+      if (open && group === 'draft') {
+        const key = offerKeyNow();
+        refreshOffer(key);
+        const hit = model.precheck && model.precheck.key === key ? model.precheck : null;
+        if (hit) {
+          const line = offerLine({ qualifies: hit.eligible, reason_code: hit.reason });
+          el.offer.dataset.state = line.state;
+          el.offer.textContent = line.text;
+        } else if (model.offerKey === key && model.offerState === 'pending') {
+          el.offer.dataset.state = 'pending';
+          el.offer.textContent = 'Checking whether this bet qualifies…';
+        } else el.offer.hidden = true;
+      }
       el.note.hidden = !warning;
       el.note.textContent = warning;
 
@@ -578,6 +655,29 @@
       }
     }
 
+    // ----- open boosts: background offers check (latest answer wins) -----
+    const OFFER_DEBOUNCE_MS = 350;
+    function refreshOffer(key) {
+      if (key === model.offerKey) return;
+      model.offerKey = key;
+      model.offerState = 'pending';
+      clearTimeout(model.offerTimer);
+      const seq = ++model.offerSeq;
+      model.offerTimer = setTimeout(async () => {
+        try {
+          const data = await deps.offer();
+          if (seq !== model.offerSeq) return;
+          model.precheck = { eligible: data.qualifies === true, reason: data.qualifies === true ? null : data.reason_code || null, combinedOdds: data.combined_odds ?? null, signature: signatureOf(currentLegs()), key };
+          model.offerState = 'done';
+        } catch (error) {
+          if (seq !== model.offerSeq) return;
+          model.offerState = 'failed';
+          if (model.precheck && model.precheck.key === key) model.precheck = null;
+        }
+        render();
+      }, OFFER_DEBOUNCE_MS);
+    }
+
     // ----- driving the console's own code paths -----
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     async function until(check, timeout = 9000) {
@@ -595,19 +695,24 @@
     async function placeBet() {
       if (model.placing || isActive()) return;
       model.placing = true;
-      model.precheck = null;
       render();
       try {
         // A fresh bet ID first, so a new bet never reuses the previous ride's identity.
         doc.getElementById('betId').value = deps.generateBetId();
+        doc.getElementById('betId').dispatchEvent(new Event('input', { bubbles: true })); // the console re-checks what it can start
         if (doc.getElementById('profileId').textContent.trim() === 'n/a') {
           if (!await consoleClick('createProfile', () => doc.getElementById('profileId').textContent.trim() !== 'n/a')) return;
         }
-        if (!state.readyToStart) {
-          if (!await consoleClick('grantReward', () => state.readyToStart)) return;
+        // Open boosts have no grant step: the reward is created when the player uses the boost on the placed bet,
+        // and the draft slip already carries the server's answer for this ticket.
+        if (!isOpen()) {
+          model.precheck = null;
+          if (!state.readyToStart) {
+            if (!await consoleClick('grantReward', () => state.readyToStart)) return;
+          }
+          // The server's combined odds for this ticket, through the console's own eligibility check.
+          await consoleClick('precheckEligibility', () => true);
         }
-        // The server's combined odds for this ticket, through the console's own eligibility check.
-        await consoleClick('precheckEligibility', () => true);
         model.placed = true;
         model.placedBetId = doc.getElementById('betId').value;
       } finally {
@@ -726,5 +831,6 @@
   return {
     toRational, roundHalfUp, formatOdds, formatMoney, formatStake, computePotential,
     fixtureFor, legsFromRows, productOdds, percentText, sparkDomain, mount,
+    reasonLabel, timingFields, parseGroups, offerLine, TIMING_MODES,
   };
 });
