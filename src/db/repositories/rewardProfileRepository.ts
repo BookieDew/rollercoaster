@@ -38,6 +38,7 @@ export async function create(input: CreateRewardProfileInput): Promise<RewardPro
     ride_duration_seconds: input.rideDurationSeconds,
     max_bonus_minor: JSON.stringify(input.maxBonusMinor),
     reward_validity_seconds: input.rewardValiditySeconds,
+    segment: input.segment ?? null,
     checkpoint_count: INTERNAL_CHECKPOINT_COUNT,
     volatility: INTERNAL_VOLATILITY,
     is_active: true,
@@ -54,16 +55,18 @@ export async function findById(id: string): Promise<RewardProfileVersion | null>
   return record ? mapToEntity(record) : null;
 }
 
-export async function findActive(brandId?: string): Promise<RewardProfileVersion[]> {
+export async function findActive(brandId?: string, segment?: string): Promise<RewardProfileVersion[]> {
   const query = db(TABLE).where({ is_active: true }).orderBy('created_at', 'desc');
   if (brandId !== undefined) query.andWhere({ brand_id: brandId });
+  if (segment !== undefined) query.andWhere({ segment });
   const records = await query;
   return records.map(mapToEntity);
 }
 
-export async function findAll(brandId?: string): Promise<RewardProfileVersion[]> {
+export async function findAll(brandId?: string, segment?: string): Promise<RewardProfileVersion[]> {
   const query = db(TABLE).orderBy('created_at', 'desc');
   if (brandId !== undefined) query.where({ brand_id: brandId });
+  if (segment !== undefined) query.andWhere({ segment });
   const records = await query;
   return records.map(mapToEntity);
 }
@@ -104,6 +107,7 @@ export async function update(id: string, input: UpdateRewardProfileInput): Promi
   if (input.rideDurationSeconds !== undefined) updates.ride_duration_seconds = input.rideDurationSeconds;
   if (input.maxBonusMinor !== undefined) updates.max_bonus_minor = JSON.stringify(input.maxBonusMinor);
   if (input.rewardValiditySeconds !== undefined) updates.reward_validity_seconds = input.rewardValiditySeconds;
+  if (input.segment !== undefined) updates.segment = input.segment;
   if (input.isActive !== undefined) updates.is_active = input.isActive;
 
   await db(TABLE).where({ id }).update(updates);
@@ -149,6 +153,7 @@ function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
     rewardValiditySeconds: record.reward_validity_seconds === null || record.reward_validity_seconds === undefined
       ? null
       : Number(record.reward_validity_seconds),
+    segment: (record.segment as string | null | undefined) ?? null,
     isActive: Boolean(record.is_active),
     createdAt: toIsoTimestamp(record.created_at),
     updatedAt: toIsoTimestamp(record.updated_at),

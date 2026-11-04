@@ -28,6 +28,8 @@ export interface RewardProfileVersion {
   maxBonusMinor?: Record<string, number>;
   /** Seconds a granted reward stays usable; null (legacy) = never expires. */
   rewardValiditySeconds?: number | null;
+  /** Optional operator label for organising and reporting; null = no segment. */
+  segment?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -37,6 +39,7 @@ export interface CreateRewardProfileInput {
   brandId: string;
   maxBonusMinor: Record<string, number>;
   rewardValiditySeconds: number;
+  segment?: string | null;
   name: string;
   description?: string;
   minSelections: number;
@@ -70,6 +73,8 @@ export interface UpdateRewardProfileInput {
   rideDurationSeconds?: number;
   maxBonusMinor?: Record<string, number>;
   rewardValiditySeconds?: number;
+  /** null clears the label; undefined leaves it unchanged. */
+  segment?: string | null;
   isActive?: boolean;
 }
 
@@ -92,6 +97,7 @@ export interface RewardProfileDTO {
   ride_duration_seconds: number;
   max_bonus_minor: Record<string, number>;
   reward_validity_seconds: number | null;
+  segment: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -117,6 +123,7 @@ export function toDTO(profile: RewardProfileVersion): RewardProfileDTO {
     ride_duration_seconds: profile.rideDurationSeconds,
     max_bonus_minor: profile.maxBonusMinor ?? {},
     reward_validity_seconds: profile.rewardValiditySeconds ?? null,
+    segment: profile.segment ?? null,
     is_active: profile.isActive,
     created_at: profile.createdAt,
     updated_at: profile.updatedAt,

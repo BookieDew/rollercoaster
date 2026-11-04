@@ -38,6 +38,7 @@ export async function createProfile(
       effectiveMinFloorRate: validated.effective_min_floor_rate,
       rideMode: validated.ride_mode,
       rideDurationSeconds: validated.ride_duration_seconds,
+      segment: validated.segment ?? null,
     });
 
     if (!result.success || !result.data) {
@@ -90,11 +91,11 @@ export async function getAllProfiles(
 ): Promise<void> {
   try {
     const activeOnly = req.query.active === 'true';
-    const { brand_id: brandId } = optionalBrandQuerySchema.parse(req.query);
+    const { brand_id: brandId, segment } = optionalBrandQuerySchema.parse(req.query);
 
     const result = activeOnly
-      ? await rewardProfileService.getActiveProfiles(brandId)
-      : await rewardProfileService.getAllProfiles(brandId);
+      ? await rewardProfileService.getActiveProfiles(brandId, segment)
+      : await rewardProfileService.getAllProfiles(brandId, segment);
 
     if (!result.success || !result.data) {
       throw createApiError(
@@ -141,6 +142,7 @@ export async function updateProfile(
       rideDurationSeconds: validated.ride_duration_seconds,
       maxBonusMinor: validated.max_bonus_minor,
       rewardValiditySeconds: validated.reward_validity_seconds,
+      segment: validated.segment,
       isActive: validated.is_active,
     });
 

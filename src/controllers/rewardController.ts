@@ -8,8 +8,10 @@ import {
   idParamsSchema,
   userIdParamsSchema,
   brandQuerySchema,
+  brandSegmentQuerySchema,
+  bulkGrantRewardSchema,
 } from '../validation/schemas';
-import { toDTO, publicEndTime, type OptInResponse } from '../types/userReward';
+import { toDTO, publicEndTime, type OptInResponse, type BulkGrantRewardResponse } from '../types/userReward';
 import { createApiError } from '../middleware/errorHandler';
 import { LEGACY_BRAND_ID } from '../types/brand';
 
@@ -28,6 +30,7 @@ export async function grantReward(
       userId: validated.user_id,
       profileVersionId: validated.profile_version_id,
       durationSeconds: validated.duration_seconds,
+      segment: validated.segment,
     });
 
     if (!result.success || !result.data) {
@@ -38,6 +41,43 @@ export async function grantReward(
     }
 
     res.status(201).json(toDTO(result.data));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /rewards/bulk - Grant one profile version to many players, all or nothing
+ */
+export async function grantRewardsBulk(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const validated = bulkGrantRewardSchema.parse(req.body);
+
+    const result = await rewardEntitlementService.grantRewardsBulk({
+      userIds: validated.user_ids,
+      profileVersionId: validated.profile_version_id,
+      durationSeconds: validated.duration_seconds,
+      segment: validated.segment,
+    });
+
+    if (!result.success || !result.data) {
+      throw createApiError(
+        result.error?.message ?? 'Failed to grant rewards',
+        result.error?.code!
+      );
+    }
+
+    const response: BulkGrantRewardResponse = {
+      profile_version_id: result.data.profileVersionId,
+      segment: result.data.segment,
+      count: result.data.rewards.length,
+      rewards: result.data.rewards.map(toDTO),
+    };
+    res.status(201).json(response);
   } catch (error) {
     next(error);
   }
@@ -80,9 +120,9 @@ export async function getRewardsByUser(
 ): Promise<void> {
   try {
     const { userId } = userIdParamsSchema.parse(req.params);
-    const { brand_id: brandId } = brandQuerySchema.parse(req.query);
+    const { brand_id: brandId, segment } = brandSegmentQuerySchema.parse(req.query);
 
-    const result = await rewardEntitlementService.getRewardsByUserId(brandId, userId);
+    const result = await rewardEntitlementService.getRewardsByUserId(brandId, userId, segment);
 
     if (!result.success || !result.data) {
       throw createApiError(

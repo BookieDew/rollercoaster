@@ -34,6 +34,12 @@ export const maxBonusMinorSchema = z.record(
   message: `max_bonus_minor allows at most ${MAX_BONUS_CAP_CURRENCIES} currencies`,
 });
 
+/** Operator-owned group label: trimmed, 1-64 characters of letters, digits, space, underscore, dot, colon, hyphen. */
+export const MAX_SEGMENT_LENGTH = 64;
+export const MAX_BULK_GRANT_USERS = 500;
+export const segmentSchema = z.string().trim().min(1).max(MAX_SEGMENT_LENGTH)
+  .regex(/^[A-Za-z0-9 _.:-]+$/, 'segment may only contain letters, digits, space, underscore, dot, colon and hyphen');
+
 const rewardValiditySecondsSchema = z.number().int()
   .min(MIN_REWARD_VALIDITY_SECONDS)
   .max(MAX_REWARD_VALIDITY_SECONDS);
@@ -43,9 +49,16 @@ export const brandQuerySchema = z.object({
   brand_id: brandIdSchema,
 });
 
-/** Optional brand filter for the admin profile list. */
+/** Optional brand and segment filters for the admin profile list. */
 export const optionalBrandQuerySchema = z.object({
   brand_id: brandIdSchema.optional(),
+  segment: segmentSchema.optional(),
+});
+
+/** Query string of the per-player reward list: required brand, optional segment filter. */
+export const brandSegmentQuerySchema = z.object({
+  brand_id: brandIdSchema,
+  segment: segmentSchema.optional(),
 });
 const selectionTextSchema = z.string().max(MAX_IDENTIFIER_LENGTH);
 
@@ -136,6 +149,7 @@ export const createRewardProfileSchema = z.object({
   ride_duration_seconds: z.number().int().min(1).max(86400),
   max_bonus_minor: maxBonusMinorSchema,
   reward_validity_seconds: rewardValiditySecondsSchema,
+  segment: segmentSchema.nullish(),
 }).refine(data => data.min_boost_pct <= data.max_boost_pct, {
   message: 'min_boost_pct must be less than or equal to max_boost_pct',
   path: ['min_boost_pct'],
@@ -176,6 +190,8 @@ export const updateRewardProfileSchema = z.object({
   max_bonus_minor: maxBonusMinorSchema.optional(),
   reward_validity_seconds: rewardValiditySecondsSchema.optional(),
   is_active: z.boolean().optional(),
+  /** null clears the label; absent leaves it unchanged. */
+  segment: segmentSchema.nullable().optional(),
   /** Present only to reject it: a profile never changes brand. */
   brand_id: z.unknown().optional(),
 }).refine(data => data.brand_id === undefined, {
@@ -201,6 +217,19 @@ export const grantRewardSchema = z.object({
   user_id: identifierSchema,
   profile_version_id: z.string().uuid(),
   duration_seconds: z.number().int().positive().optional(),
+  /** Absent = the profile version's segment; null = no segment. */
+  segment: segmentSchema.nullish(),
+});
+
+/** Bulk grant: one profile version to 1-500 distinct players of the profile's brand, all or nothing. */
+export const bulkGrantRewardSchema = z.object({
+  profile_version_id: z.string().uuid(),
+  user_ids: z.array(identifierSchema).min(1).max(MAX_BULK_GRANT_USERS),
+  duration_seconds: z.number().int().positive().optional(),
+  segment: segmentSchema.nullish(),
+}).refine(data => new Set(data.user_ids).size === data.user_ids.length, {
+  message: 'user_ids must be unique',
+  path: ['user_ids'],
 });
 
 // Eligibility precheck schema (bet not started yet)
@@ -301,6 +330,7 @@ export const simulationRequestSchema = z.object({
 export type CreateRewardProfileBody = z.infer<typeof createRewardProfileSchema>;
 export type UpdateRewardProfileBody = z.infer<typeof updateRewardProfileSchema>;
 export type GrantRewardBody = z.infer<typeof grantRewardSchema>;
+export type BulkGrantRewardBody = z.infer<typeof bulkGrantRewardSchema>;
 export type EligibilityRequestBody = z.infer<typeof eligibilityRequestSchema>;
 export type QuoteRequestBody = z.infer<typeof quoteRequestSchema>;
 export type LockRequestBody = z.infer<typeof lockRequestSchema>;

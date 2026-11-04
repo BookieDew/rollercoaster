@@ -28,6 +28,8 @@ export interface UserReward {
   bonusCapMinor?: number | null;
   /** Set when this reward replaces a cancelled bet's token. */
   replacesRewardId?: string | null;
+  /** Optional operator label for reporting (copied from the grant); null = none. */
+  segment?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +39,7 @@ export interface CreateUserRewardInput {
   validUntil?: string | null;
   /** Set for the replacement token of a cancelled bet. */
   replacesRewardId?: string | null;
+  segment?: string | null;
   userId: string;
   profileVersionId: string;
   startTime: string;
@@ -60,6 +63,7 @@ export interface UserRewardDTO {
   currency: string | null;
   bonus_cap_minor: number | null;
   replaces_reward_id: string | null;
+  segment: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +90,7 @@ export function toDTO(reward: UserReward): UserRewardDTO {
     currency: reward.currency ?? null,
     bonus_cap_minor: reward.bonusCapMinor ?? null,
     replaces_reward_id: reward.replacesRewardId ?? null,
+    segment: reward.segment ?? null,
     created_at: reward.createdAt,
     updated_at: reward.updatedAt,
   };
@@ -95,6 +100,21 @@ export interface GrantRewardRequest {
   user_id: string;
   profile_version_id: string;
   duration_seconds?: number;
+  segment?: string | null;
+}
+
+export interface BulkGrantRewardRequest {
+  profile_version_id: string;
+  user_ids: string[];
+  duration_seconds?: number;
+  segment?: string | null;
+}
+
+export interface BulkGrantRewardResponse {
+  profile_version_id: string;
+  segment: string | null;
+  count: number;
+  rewards: UserRewardDTO[];
 }
 
 export interface OptInResponse {

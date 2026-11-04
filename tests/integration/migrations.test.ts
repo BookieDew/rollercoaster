@@ -3,9 +3,10 @@ import { createIsolatedKnex, isPg, parseJsonColumn, type IsolatedKnex } from '..
 import { legacyBetId } from '../../migrations/013_rename_duplicate_bet_bindings';
 import { isUniqueViolation } from '../../src/db/repositories/transaction';
 
-// Migration 017 (timestamptz) is the newest; on SQLite it is a recorded no-op.
-const LATEST = '017_timestamps_with_time_zone.ts';
-const MIGRATION_COUNT = 17;
+// Migration 018 (segment labels) is the newest; 017 (timestamptz) is a recorded no-op on SQLite.
+const TIMESTAMPS = '017_timestamps_with_time_zone.ts';
+const LATEST = '018_segments.ts';
+const MIGRATION_COUNT = 18;
 
 const SETTLEMENT = {
   r1: '0b000001-0000-4000-8000-000000000001',
@@ -137,6 +138,7 @@ describe('Phase 1a migrations 012-016', () => {
         '014_add_user_rewards_brand_bet_unique_index.ts',
         '015_create_bet_settlements.ts',
         '016_close_inflight_rides_for_v4.ts',
+        TIMESTAMPS,
         LATEST,
       ]);
 
@@ -252,7 +254,7 @@ describe('Phase 1a migrations 012-016', () => {
       await knex.migrate.latest();
 
       const [, rolledBack] = await knex.migrate.rollback();
-      expect(rolledBack).toHaveLength(6);
+      expect(rolledBack).toHaveLength(7);
       expect(await knex.schema.hasTable('settlement_records')).toBe(true);
       expect(await knex.schema.hasTable('bet_settlements')).toBe(false);
       expect(await betIds(knex)).toEqual(original);
@@ -350,7 +352,7 @@ describe('Phase 1a migrations 012-016', () => {
       // Once the legacy rows are archived and removed, the migration applies.
       await knex('settlement_records').del();
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', LATEST]);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', TIMESTAMPS, LATEST]);
       expect(await knex.schema.hasTable('settlement_records')).toBe(false);
     });
 
@@ -372,6 +374,7 @@ describe('Phase 1a migrations 012-016', () => {
       const up = await lockIndexNames();
       expect(up).not.toContain('bet_boost_locks_brand_id_bet_id_index');
       expect(up).toContain('bet_boost_locks_brand_id_bet_id_unique');
+      await knex.migrate.down(); // 018
       await knex.migrate.down(); // 017
       await knex.migrate.down(); // 016
       await knex.migrate.down(); // 015
@@ -420,6 +423,7 @@ describe('Phase 1a migrations 012-016', () => {
       await seedLock('55555555-5555-4555-8555-555555555555', 'brand-a', 'shared-bet', R.unique);
       await seedLock('66666666-6666-4666-8666-666666666666', 'brand-b', 'shared-bet', R.taken);
 
+      await knex.migrate.down(); // 018 (segments)
       await knex.migrate.down(); // 017 (timestamps)
       await knex.migrate.down(); // 016 (nothing to restore here)
       await expect(knex.migrate.down()).rejects.toThrow(/locked in more than one brand/);
@@ -449,7 +453,7 @@ describe('Phase 1a migrations 012-016', () => {
       expect(isUniqueViolation(error)).toBe(true);
 
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', LATEST]);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', TIMESTAMPS, LATEST]);
     });
   });
 });

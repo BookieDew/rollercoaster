@@ -90,6 +90,11 @@ Operators can configure:
   - brand
   - maximum bonus per currency
   - token validity
+- Player groups (segments):
+  - the operator keeps its own player groups (VIP, new players, country, campaign) and decides who gets which profile
+  - an optional segment label can be put on a profile and on each granted reward, for organising and reporting
+  - one profile can be granted to a whole list of players in a single call (up to 500, all or nothing)
+  - the product stores no group membership and applies no rule based on a segment
 
 The ride math is V4 only. Each ride is built from a secret seed through keyed
 random streams, so it is reproducible for dispute handling but unpredictable to

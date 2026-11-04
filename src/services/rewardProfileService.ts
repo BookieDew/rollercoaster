@@ -106,16 +106,16 @@ export async function getProfileById(
 /**
  * Retrieves all active reward profiles.
  */
-export async function getActiveProfiles(brandId?: string): Promise<ServiceResult<RewardProfileVersion[]>> {
-  const profiles = await rewardProfileRepository.findActive(brandId);
+export async function getActiveProfiles(brandId?: string, segment?: string): Promise<ServiceResult<RewardProfileVersion[]>> {
+  const profiles = await rewardProfileRepository.findActive(brandId, segment);
   return { success: true, data: profiles };
 }
 
 /**
  * Retrieves all reward profiles (including inactive).
  */
-export async function getAllProfiles(brandId?: string): Promise<ServiceResult<RewardProfileVersion[]>> {
-  const profiles = await rewardProfileRepository.findAll(brandId);
+export async function getAllProfiles(brandId?: string, segment?: string): Promise<ServiceResult<RewardProfileVersion[]>> {
+  const profiles = await rewardProfileRepository.findAll(brandId, segment);
   return { success: true, data: profiles };
 }
 

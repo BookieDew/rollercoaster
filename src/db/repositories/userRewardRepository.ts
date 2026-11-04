@@ -55,6 +55,7 @@ export async function create(input: CreateUserRewardInput, tx?: TransactionScope
     currency: null,
     bonus_cap_minor: null,
     replaces_reward_id: input.replacesRewardId ?? null,
+    segment: input.segment ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -71,10 +72,12 @@ export async function findById(id: string, tx?: TransactionScope): Promise<UserR
 }
 
 /** A player is identified by (brand_id, user_id). */
-export async function findByUserId(brandId: string, userId: string): Promise<UserReward[]> {
-  const records = await db(TABLE)
+export async function findByUserId(brandId: string, userId: string, segment?: string): Promise<UserReward[]> {
+  const query = db(TABLE)
     .where({ brand_id: brandId, user_id: userId })
     .orderBy('created_at', 'desc');
+  if (segment !== undefined) query.andWhere({ segment });
+  const records = await query;
   return records.map(mapToEntity);
 }
 
@@ -220,6 +223,7 @@ function mapToEntity(record: Record<string, unknown>): UserReward {
     currency: (record.currency as string | null | undefined) ?? null,
     bonusCapMinor: parseMinorUnits(record.bonus_cap_minor),
     replacesRewardId: (record.replaces_reward_id as string | null | undefined) ?? null,
+    segment: (record.segment as string | null | undefined) ?? null,
     createdAt: toIsoTimestamp(record.created_at),
     updatedAt: toIsoTimestamp(record.updated_at),
   };

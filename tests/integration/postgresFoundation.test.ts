@@ -332,7 +332,7 @@ describe('Phase 2a: Postgres foundation', () => {
       const { knex, cleanup } = await createIsolatedKnex();
       try {
         const [, first] = await knex.migrate.latest();
-        expect(first).toHaveLength(17);
+        expect(first).toHaveLength(18);
         const [, again] = await knex.migrate.latest();
         expect(again).toEqual([]);
 
@@ -343,7 +343,7 @@ describe('Phase 2a: Postgres foundation', () => {
         expect(tables.rows.map((row) => row.table_name).filter((name) => !name.startsWith('knex_'))).toEqual([]);
 
         const [, second] = await knex.migrate.latest();
-        expect(second).toHaveLength(17);
+        expect(second).toHaveLength(18);
       } finally {
         await cleanup();
       }

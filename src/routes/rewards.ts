@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   grantReward,
+  grantRewardsBulk,
   precheckEligibility,
   getReward,
   getRewardsByUser,
@@ -19,6 +20,12 @@ router.use(authMiddleware);
  * Grant a reward entitlement to a user
  */
 router.post('/', grantReward);
+
+/**
+ * POST /rewards/bulk
+ * Grant one profile version to many users in one all-or-nothing call
+ */
+router.post('/bulk', grantRewardsBulk);
 
 /**
  * POST /rewards/:id/eligibility

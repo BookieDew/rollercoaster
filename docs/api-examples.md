@@ -135,6 +135,14 @@ floor toward the same-seed WAVES pre-crash maximum, not the effective cap.
 Resolved settings are frozen when a new ride starts; editing a profile afterward
 does not change that started ride or an existing locked payout.
 
+### Segments (operator player groups)
+
+A segment is an optional operator label on a profile version and on a granted reward, for organising and
+reporting (for example `VIP`, `new-players`, `DE:promo`). The operator owns the player groups and decides who
+gets which profile; the API stores no group membership and enforces nothing based on a segment. Value: trimmed
+string of 1-64 characters from `A-Z a-z 0-9 space _ . : -`; `null` or absent means no segment. Anything else is
+400 `VALIDATION_ERROR`.
+
 ### Create Profile
 
 **POST** `/api/profiles`
@@ -158,7 +166,8 @@ does not change that started ride or an existing locked payout.
   "ride_mode": "WAVES",
   "ride_duration_seconds": 3600,
   "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
-  "reward_validity_seconds": 604800
+  "reward_validity_seconds": 604800,
+  "segment": "VIP"  // Optional
 }
 
 // Response (201 Created)
@@ -181,11 +190,15 @@ does not change that started ride or an existing locked payout.
   "ride_duration_seconds": 3600,
   "max_bonus_minor": { "EUR": 50000, "USD": 55000 },
   "reward_validity_seconds": 604800,
+  "segment": "VIP",
   "is_active": true,
   "created_at": "2024-01-15T10:30:00.000Z",
   "updated_at": "2024-01-15T10:30:00.000Z"
 }
 ```
+
+Every profile response returns `segment` (`null` when none). `PUT /api/profiles/:id` accepts `segment`:
+a value sets it, `null` clears it, leaving it out keeps it.
 
 `brand_id`, `max_bonus_minor` and `reward_validity_seconds` are required.
 `max_bonus_minor` needs at least one currency with a positive integer cap, and
@@ -225,6 +238,8 @@ does not change that started ride or an existing locked payout.
 **GET** `/api/profiles` or `/api/profiles?active=true`
 
 Optional query `brand_id` limits the list to one brand (`/api/profiles?brand_id=acme&active=true`).
+Optional query `segment` returns only profiles with exactly that segment and combines with the other filters
+(`/api/profiles?brand_id=acme&segment=VIP`).
 
 ```json
 // Response (200 OK)
@@ -328,7 +343,8 @@ generated server-side from 32 random bytes and is never returned.
 {
   "user_id": "user-12345",
   "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
-  "duration_seconds": 7200  // Optional compatibility field; actual duration uses internal settings
+  "duration_seconds": 7200,  // Optional compatibility field; actual duration uses internal settings
+  "segment": "Campaign 1"  // Optional: defaults to the profile version's segment; null = no segment
 }
 
 // Response (201 Created)
@@ -347,10 +363,44 @@ generated server-side from 32 random bytes and is never returned.
   "currency": null,
   "bonus_cap_minor": null,
   "replaces_reward_id": null,
+  "segment": "Campaign 1",
   "created_at": "2024-01-15T12:00:00.000Z",
   "updated_at": "2024-01-15T12:00:00.000Z"
 }
 ```
+
+Every reward response returns `segment` (`null` when none). The label is copied onto the reward at grant time
+(from the body, else from the profile version) and is not changed by later profile edits. A replacement token
+keeps the label of the reward it replaces.
+
+### Bulk Grant Rewards
+
+**POST** `/api/rewards/bulk`
+
+Grants one profile version to many players of the profile's brand in a single call. All or nothing: every
+reward and its `GRANT` audit row is written in one transaction, or nothing is.
+
+```json
+// Request
+{
+  "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
+  "user_ids": ["user-1", "user-2", "user-3"],  // 1-500 unique ids, 1-255 characters each
+  "duration_seconds": 7200,  // Optional, same compatibility field as the single grant
+  "segment": "Campaign 1"    // Optional: defaults to the profile version's segment; null = no segment
+}
+
+// Response (201 Created); rewards are in the order of user_ids
+{
+  "profile_version_id": "550e8400-e29b-41d4-a716-446655440000",
+  "segment": "Campaign 1",
+  "count": 3,
+  "rewards": [ /* same shape as the single grant response */ ]
+}
+```
+
+The same rules as a single grant apply: an unknown profile is 404 `PROFILE_NOT_FOUND`, an inactive one is 422
+`PROFILE_INACTIVE`. An empty list, more than 500 ids or a repeated id is 400 `VALIDATION_ERROR`. In every
+failure nothing is written, so the call can be retried unchanged.
 
 ### Precheck Eligibility (Before Starting Ride)
 
@@ -423,7 +473,8 @@ generated server-side from 32 random bytes and is never returned.
 **GET** `/api/rewards/user/:userId?brand_id=acme`
 
 `brand_id` is required (400 `VALIDATION_ERROR` when missing or malformed); only
-that brand's rewards for the player are returned.
+that brand's rewards for the player are returned. Optional `segment` returns only
+rewards labelled with exactly that segment (`?brand_id=acme&segment=VIP`).
 
 ```json
 // Response (200 OK)

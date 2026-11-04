@@ -6,6 +6,7 @@ import { runInTransaction, type TransactionScope } from '../db/repositories/tran
 import { seedCommitment, v4RideDurationSeconds } from '../computations/v4';
 import { config } from '../config';
 import type { UserReward } from '../types/userReward';
+import type { RewardProfileVersion } from '../types/rewardProfile';
 import { ReasonCode } from '../types/reasonCodes';
 import { LEGACY_BRAND_ID } from '../types/brand';
 
@@ -13,6 +14,22 @@ export interface GrantRewardInput {
   userId: string;
   profileVersionId: string;
   durationSeconds?: number;
+  /** Undefined = the profile version's segment; null = no segment. */
+  segment?: string | null;
+}
+
+export interface BulkGrantRewardInput {
+  userIds: string[];
+  profileVersionId: string;
+  durationSeconds?: number;
+  /** Undefined = the profile version's segment; null = no segment. */
+  segment?: string | null;
+}
+
+export interface BulkGrantResult {
+  profileVersionId: string;
+  segment: string | null;
+  rewards: UserReward[];
 }
 
 export interface ServiceResult<T> {
@@ -29,17 +46,10 @@ export function createRideSeed(): string {
   return randomBytes(32).toString('hex');
 }
 
-/**
- * Grants a new reward entitlement to a user.
- * Creates a user reward instance with start/end times, assigns profile version, and
- * generates a random ride seed. The insert and its audit row are atomic.
- */
-export async function grantReward(
-  input: GrantRewardInput
-): Promise<ServiceResult<UserReward>> {
-  const { userId, profileVersionId, durationSeconds } = input;
-
-  // Verify profile exists and is active
+/** Loads the profile version a grant refers to; it must exist and be active. */
+async function findGrantableProfile(
+  profileVersionId: string
+): Promise<ServiceResult<RewardProfileVersion>> {
   const profile = await rewardProfileRepository.findById(profileVersionId);
   if (!profile) {
     return {
@@ -61,6 +71,20 @@ export async function grantReward(
     };
   }
 
+  return { success: true, data: profile };
+}
+
+/**
+ * Creates one reward and its GRANT audit row inside the caller's transaction.
+ * The single and the bulk grant both go through here, so they apply identical rules.
+ */
+async function createGrantInTransaction(
+  profile: RewardProfileVersion,
+  userId: string,
+  durationSeconds: number | undefined,
+  segmentOverride: string | null | undefined,
+  tx: TransactionScope
+): Promise<UserReward> {
   // Calculate start and end times
   const now = new Date();
   const startTime = now.toISOString();
@@ -69,45 +93,106 @@ export async function grantReward(
   const endTime = new Date(now.getTime() + duration * 1000).toISOString();
   // Legacy profiles have no validity and their rewards never expire.
   const brandId = profile.brandId ?? LEGACY_BRAND_ID;
+  const profileVersionId = profile.id;
   const validUntil = profile.rewardValiditySeconds == null
     ? null
     : new Date(now.getTime() + profile.rewardValiditySeconds * 1000).toISOString();
+  const segment = resolveSegment(profile, segmentOverride);
 
-  const reward = await runInTransaction(async (tx) => {
-    const created = await userRewardRepository.create({
+  const created = await userRewardRepository.create({
+    brandId,
+    validUntil,
+    userId,
+    profileVersionId,
+    segment,
+    startTime,
+    endTime,
+    seed,
+  }, tx);
+
+  await auditLogRepository.append({
+    entityType: 'user_reward',
+    entityId: created.id,
+    action: 'GRANT',
+    payload: {
       brandId,
-      validUntil,
       userId,
       profileVersionId,
+      segment,
+      validUntil,
       startTime,
       endTime,
-      seed,
-    }, tx);
+      durationSeconds: duration,
+      requestedDurationSeconds: durationSeconds,
+      minDurationSeconds: config.ride.minDurationSeconds,
+      maxDurationSeconds: config.ride.maxDurationSeconds,
+      // Never the seed itself (contract §1): its SHA-256 commitment.
+      seedCommitment: seedCommitment(seed),
+    },
+  }, tx);
 
-    await auditLogRepository.append({
-      entityType: 'user_reward',
-      entityId: created.id,
-      action: 'GRANT',
-      payload: {
-        brandId,
-        userId,
-        profileVersionId,
-        validUntil,
-        startTime,
-        endTime,
-        durationSeconds: duration,
-        requestedDurationSeconds: durationSeconds,
-        minDurationSeconds: config.ride.minDurationSeconds,
-        maxDurationSeconds: config.ride.maxDurationSeconds,
-        // Never the seed itself (contract §1): its SHA-256 commitment.
-        seedCommitment: seedCommitment(seed),
-      },
-    }, tx);
+  return created;
+}
 
+/** An explicit segment (including null = none) wins; otherwise the reward takes the profile version's label. */
+function resolveSegment(profile: RewardProfileVersion, override: string | null | undefined): string | null {
+  return override === undefined ? (profile.segment ?? null) : override;
+}
+
+/**
+ * Grants a new reward entitlement to a user.
+ * Creates a user reward instance with start/end times, assigns profile version, and
+ * generates a random ride seed. The insert and its audit row are atomic.
+ */
+export async function grantReward(
+  input: GrantRewardInput
+): Promise<ServiceResult<UserReward>> {
+  const { userId, profileVersionId, durationSeconds, segment } = input;
+
+  const found = await findGrantableProfile(profileVersionId);
+  if (!found.success || !found.data) {
+    return { success: false, error: found.error };
+  }
+  const profile = found.data;
+
+  const reward = await runInTransaction((tx) =>
+    createGrantInTransaction(profile, userId, durationSeconds, segment, tx));
+
+  return { success: true, data: reward };
+}
+
+/**
+ * Grants one profile version to many players in a single transaction: either every
+ * reward and audit row is written or nothing is. Same profile checks and same per-reward
+ * logic as grantReward; rewards come back in input order.
+ */
+export async function grantRewardsBulk(
+  input: BulkGrantRewardInput
+): Promise<ServiceResult<BulkGrantResult>> {
+  const { userIds, profileVersionId, durationSeconds, segment } = input;
+
+  const found = await findGrantableProfile(profileVersionId);
+  if (!found.success || !found.data) {
+    return { success: false, error: found.error };
+  }
+  const profile = found.data;
+
+  const rewards = await runInTransaction(async (tx) => {
+    const created: UserReward[] = [];
+    for (const userId of userIds) {
+      created.push(await createGrantInTransaction(profile, userId, durationSeconds, segment, tx));
+    }
     return created;
   });
 
-  return { success: true, data: reward };
+  return {
+    success: true,
+    data: {
+      profileVersionId,
+      segment: resolveSegment(profile, segment),
+      rewards,
+    },
+  };
 }
 
 export interface ReplacementContext {
@@ -143,6 +228,7 @@ export async function issueReplacementReward(
     replacesRewardId: original.id,
     userId: original.userId,
     profileVersionId: original.profileVersionId,
+    segment: original.segment ?? null,
     startTime,
     endTime,
     seed,
@@ -197,9 +283,10 @@ export async function getRewardById(
  */
 export async function getRewardsByUserId(
   brandId: string,
-  userId: string
+  userId: string,
+  segment?: string
 ): Promise<ServiceResult<UserReward[]>> {
-  const rewards = await userRewardRepository.findByUserId(brandId, userId);
+  const rewards = await userRewardRepository.findByUserId(brandId, userId, segment);
   return { success: true, data: rewards };
 }
 
@@ -234,6 +321,7 @@ export async function processExpiredRewards(): Promise<ServiceResult<number>> {
 
 export const rewardEntitlementService = {
   grantReward,
+  grantRewardsBulk,
   issueReplacementReward,
   getRewardById,
   getRewardsByUserId,

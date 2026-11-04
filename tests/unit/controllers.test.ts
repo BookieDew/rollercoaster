@@ -382,7 +382,7 @@ describe('controller branch coverage', () => {
       });
       await getRewardsByUser(mockRequest({}, { userId: 'u1' }, { brand_id: 'brand-a' }), res, next);
       expect(res.json).toHaveBeenCalled();
-      expect(rewardEntitlementService.getRewardsByUserId).toHaveBeenCalledWith('brand-a', 'u1');
+      expect(rewardEntitlementService.getRewardsByUserId).toHaveBeenCalledWith('brand-a', 'u1', undefined);
 
       await getRewardsByUser(mockRequest({}, { userId: 'u1' }), res, next);
       expect(nextError(next)).toBeInstanceOf(ZodError);
