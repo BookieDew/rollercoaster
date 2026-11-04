@@ -94,6 +94,22 @@
         <div class="panel-block card" id="profileSetup">
           <div class="card-head"><div><h2>Profile</h2><p class="card-description">Configure the next reward.</p></div><span class="step-number">01</span></div>
           <div class="section-body">
+            <div class="subgroup">Saved profiles</div>
+            <div class="grid grid-4 profile-picker">
+              <div class="field picker-main">
+                <label for="savedProfile">Saved profile</label>
+                <select id="savedProfile"><option value="">New profile (use the form)</option></select>
+              </div>
+              <div class="field">
+                <label for="profileGroupFilter">Group</label>
+                <select id="profileGroupFilter"><option value="">All</option></select>
+              </div>
+              <div class="field picker-refresh">
+                <button class="ghost" id="refreshProfiles" type="button">Refresh</button>
+              </div>
+            </div>
+            <p class="setup-help" id="profilePickerNote" role="status">Loading saved profiles…</p>
+
             <div class="subgroup">Eligibility</div>
             <div class="grid grid-4">
               <div class="field">
@@ -166,6 +182,10 @@
                 <input id="validityDays" type="number" min="0.001" step="any" inputmode="decimal" value="7" title="How long a granted reward stays usable before it expires" />
               </div>
               <div class="field">
+                <label for="profileSegment">Group label</label>
+                <input id="profileSegment" maxlength="64" placeholder="optional, e.g. VIP" spellcheck="false" autocomplete="off" title="Optional operator label, 1-64 chars: letters, digits, space and _ . : -" />
+              </div>
+              <div class="field">
                 <label for="maxBonus">Max bonus</label>
                 <input id="maxBonus" inputmode="decimal" value="500.00" title="Bonus cap in the Currency chosen in step 02; sent as whole minor units" autocomplete="off" />
               </div>
@@ -178,6 +198,7 @@
             <div class="meta">
               <span class="tag">Profile ID</span>
               <span class="id-value" id="profileId">n/a</span>
+              <span class="tag" id="profileDirty" hidden>changed — Create Profile to save as new</span>
             </div>
           </div>
         </div>
@@ -221,6 +242,8 @@
             <div class="meta">
               <span class="tag">Reward ID</span>
               <span class="id-value" id="rewardId">n/a</span>
+              <span class="tag">Group</span>
+              <span class="id-value" id="rewardSegment">n/a</span>
             </div>
 
             <div class="selection-list" id="selectionRows"></div>
@@ -894,6 +917,91 @@
         return `bet-${Date.now()}`;
       }
 
+      // Saved-profile picker: server values fill the form; Create Profile always creates a new profile.
+      const PROFILE_FIELDS = {
+        profileName: 'name', minSelections: 'min_selections', minCombinedOdds: 'min_combined_odds',
+        minSelectionOdds: 'min_selection_odds', minBoostPct: 'min_boost_pct', maxBoostPct: 'max_boost_pct',
+        maxBoostMinSelections: 'max_boost_min_selections', maxBoostMinCombinedOdds: 'max_boost_min_combined_odds',
+        maxEligibilitySelectionWeight: 'max_eligibility_selection_weight', maxEligibilityOddsWeight: 'max_eligibility_odds_weight',
+        effectiveMinFloorRate: 'effective_min_floor_rate', rideMode: 'ride_mode',
+      };
+      const profilePicker = { list: [], loadSeq: 0, applying: false };
+
+      function pickerNote(text) { document.getElementById('profilePickerNote').textContent = text; }
+
+      function profileLabel(p) {
+        return `${p.name} · ${p.segment || 'no group'} · ${p.ride_mode} · ${String(p.id).slice(0, 8)}`;
+      }
+
+      function renderProfilePicker(selectId) {
+        const filterEl = document.getElementById('profileGroupFilter');
+        const select = document.getElementById('savedProfile');
+        const groups = [...new Set(profilePicker.list.map((p) => p.segment).filter(Boolean))].sort();
+        const wantedGroup = filterEl.value;
+        filterEl.replaceChildren(new Option('All', ''), ...groups.map((g) => new Option(g, g)));
+        filterEl.value = groups.includes(wantedGroup) ? wantedGroup : '';
+        const shown = profilePicker.list.filter((p) => !filterEl.value || p.segment === filterEl.value);
+        const keep = selectId ?? select.value;
+        select.replaceChildren(new Option('New profile (use the form)', ''), ...shown.map((p) => new Option(profileLabel(p), p.id)));
+        select.value = shown.some((p) => p.id === keep) ? keep : '';
+        pickerNote(profilePicker.list.length ? `${shown.length} of ${profilePicker.list.length} saved profiles shown.` : 'No saved profiles for this brand yet.');
+      }
+
+      async function loadProfiles(selectId) {
+        const seq = ++profilePicker.loadSeq;
+        try {
+          const brand = getValue('brandId').trim();
+          const data = await apiFetch(`/api/profiles?brand_id=${encodeURIComponent(brand)}&active=true`, 'GET');
+          if (seq !== profilePicker.loadSeq) return;
+          profilePicker.list = [...(data.profiles || [])].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+          renderProfilePicker(selectId);
+          if (selectId) applySavedProfile(selectId);
+        } catch (error) {
+          if (seq !== profilePicker.loadSeq) return;
+          profilePicker.list = [];
+          renderProfilePicker('');
+          pickerNote('Could not load saved profiles. You can still create one with the form.');
+        }
+      }
+
+      function applySavedProfile(id) {
+        const p = profilePicker.list.find((item) => item.id === id);
+        if (!p) { document.getElementById('profileDirty').hidden = true; return; }
+        profilePicker.applying = true;
+        for (const [inputId, key] of Object.entries(PROFILE_FIELDS)) {
+          document.getElementById(inputId).value = p[key] === null || p[key] === undefined ? '' : p[key];
+        }
+        document.getElementById('profileSegment').value = p.segment || '';
+        const days = Number(p.reward_validity_seconds) / 86400;
+        if (Number.isFinite(days) && days > 0) document.getElementById('validityDays').value = String(Number(days.toFixed(6)));
+        let note = `Loaded "${p.name}".`;
+        let cap = null;
+        try { cap = p.max_bonus_minor?.[currencyCode()]; } catch (e) { /* currency invalid: leave empty */ }
+        if (Number.isSafeInteger(cap) && cap > 0) {
+          document.getElementById('maxBonus').value = `${Math.floor(cap / 100)}.${String(cap % 100).padStart(2, '0')}`;
+        } else {
+          document.getElementById('maxBonus').value = '';
+          note += ' It has no cap for the current currency.';
+        }
+        pickerNote(note);
+        setText('profileId', p.id);
+        document.getElementById('profileDirty').hidden = true;
+        profilePicker.applying = false;
+        updateControls();
+      }
+
+      document.getElementById('savedProfile').addEventListener('change', (e) => {
+        if (e.target.value) applySavedProfile(e.target.value);
+        else { document.getElementById('profileDirty').hidden = true; updateControls(); }
+      });
+      document.getElementById('profileGroupFilter').addEventListener('change', () => renderProfilePicker());
+      document.getElementById('refreshProfiles').addEventListener('click', () => loadProfiles());
+      document.getElementById('brandId').addEventListener('change', () => loadProfiles());
+      document.querySelectorAll('#profileName, #minSelections, #minCombinedOdds, #minSelectionOdds, #minBoostPct, #maxBoostPct, #maxBoostMinSelections, #maxBoostMinCombinedOdds, #maxEligibilitySelectionWeight, #maxEligibilityOddsWeight, #effectiveMinFloorRate, #rideMode, #profileSegment, #validityDays, #maxBonus').forEach((el) => {
+        const mark = () => { if (!profilePicker.applying && document.getElementById('savedProfile').value) document.getElementById('profileDirty').hidden = false; };
+        el.addEventListener('input', mark); el.addEventListener('change', mark);
+      });
+
       document.getElementById('createProfile').addEventListener('click', () => action('profile', async () => {
         const payload = {
           name: getValue('profileName'),
@@ -917,9 +1025,15 @@
           max_bonus_minor: { [currencyCode()]: parseMinorAmount(getValue('maxBonus'), 'Max bonus') },
           reward_validity_seconds: validitySeconds(),
         };
+        const segment = getValue('profileSegment').trim();
+        if (segment) {
+          if (!/^[A-Za-z0-9 _.:-]{1,64}$/.test(segment)) throw new Error('Group label must be 1-64 characters: letters, digits, space and _ . : -');
+          payload.segment = segment;
+        }
 
         const data = await apiFetch('/api/profiles', 'POST', payload);
         setText('profileId', data.id);
+        await loadProfiles(data.id);
         setResponse(data);
         announce('Profile created. Grant a reward to use it; existing ticket inputs are retained.');
       }));
@@ -927,6 +1041,7 @@
       document.getElementById('grantReward').addEventListener('click', () => action('grant', async () => {
         const data = await apiFetch('/api/rewards', 'POST', { user_id: getValue('userId'), profile_version_id: document.getElementById('profileId').textContent.trim() });
         setText('rewardId', data.id);
+        setText('rewardSegment', data.segment ? data.segment : 'none');
         document.getElementById('betId').value = generateBetId();
         state.readyToStart = true;
         // Keep a previous final result visible until a new ride actually starts.
@@ -1043,6 +1158,9 @@
         summary: () => ({ text: rideSummary.textContent, warning: rideSummary.dataset.warning === 'true' }),
       });
       updateControls();
+      document.getElementById('apiKey').addEventListener('change', () => loadProfiles());
+      document.getElementById('apiBase').addEventListener('change', () => loadProfiles());
+      loadProfiles();
 
     </script>
   </body>

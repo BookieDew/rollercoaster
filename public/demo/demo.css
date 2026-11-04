@@ -437,3 +437,9 @@ body.slip-open { padding-left: 400px; }
   .slip-burst { display: none; }
   .stage-dot, .stage-confirm { animation: none !important; }
 }
+
+.profile-picker { align-items: end; }
+.profile-picker .picker-main { grid-column: span 2; }
+.profile-picker .picker-refresh button { width: 100%; }
+#profileDirty { background: #fff4d6; color: #7a5200; }
+@media (max-width: 640px) { .profile-picker .picker-main { grid-column: auto; } }
