@@ -443,3 +443,20 @@ body.slip-open { padding-left: 400px; }
 .profile-picker .picker-refresh button { width: 100%; }
 #profileDirty { background: #fff4d6; color: #7a5200; }
 @media (max-width: 640px) { .profile-picker .picker-main { grid-column: auto; } }
+
+/* ui5: desktop operator ticket stays compact (<720 px); tablet and mobile unchanged */
+@media (min-width: 1280px) {
+  .ticket-card .card-head { padding-top: 14px; }
+  .ticket-card .section-body { padding-top: 8px; padding-bottom: 14px; }
+  .ticket-card .ticket-identity { gap: 8px 10px; }
+  .ticket-card .ticket-identity-amounts { margin-top: 6px; }
+  .ticket-card .field { gap: 4px; }
+  .ticket-card .actions, .ticket-card .meta { margin-top: 8px; }
+  .ticket-card .selection-list { gap: 6px; margin-top: 8px; }
+  .ticket-card .selection-row { padding: 6px 10px; }
+  .ticket-card .selection-row label { margin-bottom: 3px; }
+  .ticket-card .selection-note { margin-top: 3px; }
+  .ticket-card .ticket-preview { margin-top: 8px; }
+}
+/* ui5: 3 px header overflow at 768 (API/key inputs) */
+@media (min-width: 701px) and (max-width: 820px) { .topbar-api input { width: 150px; } }
