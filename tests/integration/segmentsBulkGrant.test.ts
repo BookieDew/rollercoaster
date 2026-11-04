@@ -8,6 +8,11 @@ import { createIsolatedKnex, isPg } from '../helpers/testDb';
 /** Slice API-2: operator segment labels on profiles and rewards, and the all-or-nothing bulk grant. */
 const API_KEY = 'test-api-key';
 
+/** SQLite returns json columns as text, Postgres as parsed objects. */
+function readPayload(payload: unknown): Record<string, unknown> {
+  return (typeof payload === 'string' ? JSON.parse(payload) : payload) as Record<string, unknown>;
+}
+
 function profileBody(brandId: string, extra: Record<string, unknown> = {}) {
   return {
     name: `Segment profile ${brandId}`,
@@ -149,7 +154,7 @@ describe('Segment labels and bulk grant', () => {
       expect(reread.body.segment).toBe('VIP');
 
       const audit = await db('audit_logs').where({ entity_id: overridden.body.id, action: 'GRANT' }).first();
-      expect(JSON.parse(audit.payload).segment).toBe('Promo.Q4');
+      expect(readPayload(audit.payload).segment).toBe('Promo.Q4');
 
       expect((await grant({ user_id: 'u1', profile_version_id: profile.body.id, segment: 'a/b' })).status).toBe(400);
     });
@@ -199,7 +204,7 @@ describe('Segment labels and bulk grant', () => {
       for (const reward of res.body.rewards) {
         const audit = await db('audit_logs').where({ entity_id: reward.id, action: 'GRANT' });
         expect(audit).toHaveLength(1);
-        expect(JSON.parse(audit[0].payload)).toMatchObject({ brandId: 'seg-a', segment: 'VIP', userId: reward.user_id });
+        expect(readPayload(audit[0].payload)).toMatchObject({ brandId: 'seg-a', segment: 'VIP', userId: reward.user_id });
       }
 
       // The grants are readable per player.
