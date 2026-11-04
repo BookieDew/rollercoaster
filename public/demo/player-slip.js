@@ -143,12 +143,28 @@
     return `${+(Number(fraction) * 100).toFixed(digits)}%`;
   }
 
+  // Y-domain of the live mini line from observed boosts only: [min, max] plus a 10% margin,
+  // at least 1 percentage point (0.01) wide, never below 0. No prediction or extrapolation.
+  function sparkDomain(boosts) {
+    const values = boosts.filter((value) => Number.isFinite(value));
+    if (!values.length) return { min: 0, max: 0.01 };
+    const lo = Math.min(...values), hi = Math.max(...values);
+    const margin = Math.max(hi - lo, 0) * 0.1;
+    let min = lo - margin, max = hi + margin;
+    if (max - min < 0.01) {
+      const mid = (lo + hi) / 2;
+      min = mid - 0.005; max = mid + 0.005;
+    }
+    if (min < 0) { max -= min; min = 0; }
+    return { min, max };
+  }
+
   // ---------- view ----------
   const ICONS = {
     close: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2m-7 0 1 12h8l1-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     share: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M6 12v7h12v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    gear: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10.52 4.55L10.92 2.06L13.08 2.06L13.48 4.55L16.22 5.68L18.27 4.21L19.79 5.73L18.32 7.78L19.45 10.52L21.94 10.92L21.94 13.08L19.45 13.48L18.32 16.22L19.79 18.27L18.27 19.79L16.22 18.32L13.48 19.45L13.08 21.94L10.92 21.94L10.52 19.45L7.78 18.32L5.73 19.79L4.21 18.27L5.68 16.22L4.55 13.48L2.06 13.08L2.06 10.92L4.55 10.52L5.68 7.78L4.21 5.73L5.73 4.21L7.78 5.68ZM12 8.6a3.4 3.4 0 1 0 0 6.8a3.4 3.4 0 1 0 0-6.8Z"/></svg>',
     pencil: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 19 1-4 9-9 3 3-9 9-4 1Zm9-12 3 3" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
   };
   const CHIPS = [5, 20, 50, 100];
@@ -326,10 +342,12 @@
       if (!samples.length) { el.spark.setAttribute('d', ''); return; }
       const width = 240, height = 48, pad = 4;
       const lastSeconds = samples.at(-1).seconds;
-      const peak = Math.max(0.0001, ...samples.map((sample) => sample.boost));
+      const domain = sparkDomain(samples.map((sample) => sample.boost));
       const x = (seconds) => (lastSeconds > 0 ? pad + (seconds / lastSeconds) * (width - 2 * pad) : width / 2);
-      const y = (boost) => height - pad - (boost / peak) * (height - 2 * pad);
-      el.spark.setAttribute('d', samples.map((sample, index) => `${index === 0 || sample.gapBefore ? 'M' : 'L'} ${x(sample.seconds).toFixed(1)} ${y(sample.boost).toFixed(1)}`).join(' '));
+      const y = (boost) => height - pad - ((boost - domain.min) / (domain.max - domain.min)) * (height - 2 * pad);
+      const path = samples.map((sample, index) => `${index === 0 || sample.gapBefore ? 'M' : 'L'} ${x(sample.seconds).toFixed(1)} ${y(sample.boost).toFixed(1)}`).join(' ');
+      // One sample is a dot (zero-length round-capped segment), never a slope.
+      el.spark.setAttribute('d', samples.length === 1 ? `${path} h0.01` : path);
     }
 
     function burst() {
@@ -551,6 +569,6 @@
 
   return {
     toRational, roundHalfUp, formatOdds, formatMoney, formatStake, computePotential,
-    fixtureFor, legsFromRows, productOdds, percentText, mount,
+    fixtureFor, legsFromRows, productOdds, percentText, sparkDomain, mount,
   };
 });

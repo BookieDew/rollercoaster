@@ -114,3 +114,27 @@ test('percent text trims trailing zeros', () => {
   assert.equal(slip.percentText(0.37), '37%');
   assert.equal(slip.percentText(0.12345), '12.35%');
 });
+
+test('sparkDomain fits observed boosts with a margin, min span 1 pp, floor 0', () => {
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  // one sample: 1 pp span centred on it
+  let d = slip.sparkDomain([0.05]);
+  close(d.min, 0.045); close(d.max, 0.055);
+  // flat series behaves like one sample
+  d = slip.sparkDomain([0.05, 0.05, 0.05]);
+  close(d.min, 0.045); close(d.max, 0.055);
+  // rising series: 10% of range margin each side
+  d = slip.sparkDomain([0.02, 0.12]);
+  close(d.min, 0.01); close(d.max, 0.13);
+  // span below 1 pp widens to 1 pp
+  d = slip.sparkDomain([0.050, 0.052]);
+  close(d.max - d.min, 0.01); close((d.min + d.max) / 2, 0.051);
+  // near 0: floored at 0, span preserved
+  d = slip.sparkDomain([0, 0.002]);
+  assert.equal(d.min, 0); close(d.max, 0.01);
+  d = slip.sparkDomain([0.001]);
+  assert.equal(d.min, 0); close(d.max, 0.01);
+  // empty
+  d = slip.sparkDomain([]);
+  assert.equal(d.min, 0); assert.ok(d.max > d.min);
+});
