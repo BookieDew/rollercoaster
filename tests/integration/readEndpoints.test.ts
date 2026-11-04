@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { app } from '../../src/index';
 import db from '../../src/db/connection';
+import { parseJsonColumn } from '../helpers/testDb';
 
 describe('Read Endpoints Integration Tests', () => {
   const API_KEY = 'test-api-key';
@@ -150,7 +151,7 @@ describe('Read Endpoints Integration Tests', () => {
     // Represent a historical lock without model metadata; reading/repeating the
     // lock must omit the field and preserve its stored payout/path exactly.
     const row = await db('bet_boost_locks').where({ bet_id: betId }).first();
-    const historicalSnapshot = JSON.parse(row.snapshot);
+    const historicalSnapshot = parseJsonColumn(row.snapshot);
     delete historicalSnapshot.maximumModel;
     await db('bet_boost_locks').where({ bet_id: betId })
       .update({ snapshot: JSON.stringify(historicalSnapshot) });

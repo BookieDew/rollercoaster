@@ -5,6 +5,7 @@ import { ReasonCode } from '../../src/types/reasonCodes';
 import { liveMomentMs } from '../helpers/v4Rides';
 import { auditLogRepository } from '../../src/db/repositories/auditLogRepository';
 import { settlementRepository } from '../../src/db/repositories/settlementRepository';
+import { parseJsonColumn } from '../helpers/testDb';
 
 /**
  * Phase 1a settlement, end to end through HTTP (contract section 4).
@@ -64,7 +65,7 @@ function optIn(rewardId: string, userId: string, betId: string, selections: Sele
 /** Freezes the evaluation clock inside the pre-crash window of a reward's ride. */
 async function freezeClockAtLivePoint(rewardId: string): Promise<void> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  jest.spyOn(Date, 'now').mockReturnValue(liveMomentMs(JSON.parse(row.ticket_snapshot).rideMath));
+  jest.spyOn(Date, 'now').mockReturnValue(liveMomentMs(parseJsonColumn(row.ticket_snapshot).rideMath));
 }
 
 interface LockedBet {
@@ -208,7 +209,7 @@ describe('Phase 1a settlement', () => {
       expect((await db('user_rewards').where({ id: bet.rewardId }).first()).status).toBe('USED');
       const audit = await db('audit_logs').where({ action: 'SETTLE' });
       expect(audit).toHaveLength(1);
-      expect(JSON.parse(audit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(audit[0].payload)).toMatchObject({
         betResult: expected.bet_result, bonusMinor: expected.bonus_minor, rewardId: bet.rewardId,
       });
     });
@@ -243,7 +244,7 @@ describe('Phase 1a settlement', () => {
       expect((await db('user_rewards').where({ id: bet.rewardId }).first()).status).toBe('USED');
       const grantAudit = await db('audit_logs').where({ action: 'GRANT_REPLACEMENT', entity_id: replacement.id });
       expect(grantAudit).toHaveLength(1);
-      expect(JSON.parse(grantAudit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(grantAudit[0].payload)).toMatchObject({
         replacesRewardId: bet.rewardId, settlementId: res.body.settlement_id, betId: 'cancel-bet', trigger: 'SETTLE',
       });
 
@@ -365,7 +366,7 @@ describe('Phase 1a settlement', () => {
       const rows = await db('bet_settlements').where({ lock_id: bet.lockId }).orderBy('revision', 'asc');
       expect(rows.map((row) => row.total_return_minor)).toEqual([exact(412), '0', exact(412)]);
       const audit = (await db('audit_logs').whereIn('action', ['SETTLE', 'RESETTLE']))
-        .map((row) => JSON.parse(row.payload) as { revision: number; totalReturnMinor: string })
+        .map((row) => parseJsonColumn(row.payload) as { revision: number; totalReturnMinor: string })
         .sort((x, y) => x.revision - y.revision);
       expect(audit.map((payload) => payload.totalReturnMinor)).toEqual([exact(412), '0', exact(412)]);
     });
@@ -469,7 +470,7 @@ describe('Phase 1a settlement', () => {
         .toEqual([[1, false], [2, true]]);
       const audit = await db('audit_logs').where({ action: 'RESETTLE' });
       expect(audit).toHaveLength(1);
-      expect(JSON.parse(audit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(audit[0].payload)).toMatchObject({
         reason: 'Leg b voided by the feed', previousRevision: 1, previousBonusMinor: 1995, bonusDeltaMinor: -945,
       });
 
@@ -527,10 +528,10 @@ describe('Phase 1a settlement', () => {
       expect((await db('user_rewards').where({ id: replacementId }).first()).status).toBe('EXPIRED');
       const revokeAudit = await db('audit_logs').where({ action: 'EXPIRE', entity_id: replacementId });
       expect(revokeAudit).toHaveLength(1);
-      expect(JSON.parse(revokeAudit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(revokeAudit[0].payload)).toMatchObject({
         reason: 'REVOKED_BY_RESETTLEMENT', previousStatus: 'GRANTED', settlementId: lost.body.settlement_id,
       });
-      expect(JSON.parse((await db('audit_logs').where({ action: 'RESETTLE' }).first()).payload).revokedRewardId)
+      expect(parseJsonColumn((await db('audit_logs').where({ action: 'RESETTLE' }).first()).payload).revokedRewardId)
         .toBe(replacementId);
       // The revoked token cannot be used.
       expect((await optIn(replacementId, bet.userId, 'revoked-use')).body.code).toBe(ReasonCode.REWARD_EXPIRED);
@@ -539,7 +540,7 @@ describe('Phase 1a settlement', () => {
       expect(cancelledAgain.body).toMatchObject({ revision: 3, replacement_status: 'ISSUED' });
       expect(cancelledAgain.body.replacement_reward_id).not.toBe(replacementId);
       const grants = await db('audit_logs').where({ action: 'GRANT_REPLACEMENT' });
-      expect(grants.map((row: { payload: string }) => JSON.parse(row.payload).trigger).sort()).toEqual(['RESETTLE', 'SETTLE']);
+      expect(grants.map((row: { payload: string }) => parseJsonColumn(row.payload).trigger).sort()).toEqual(['RESETTLE', 'SETTLE']);
     });
 
     it('keeps the same replacement when a cancelled bet stays cancelled', async () => {
@@ -760,7 +761,7 @@ describe('Phase 1a settlement', () => {
     it('returns 422 SETTLEMENT_UNAVAILABLE when stored odds exceed 6 decimals, writing nothing', async () => {
       const bet = await lockedBet('bad-odds-bet');
       const row = await db('user_rewards').where({ id: bet.rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
+      const snapshot = parseJsonColumn(row.ticket_snapshot);
       snapshot.selections[0].odds = 2.1234567;
       await db('user_rewards').where({ id: bet.rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
       const auditBefore = await db('audit_logs').count('* as c').first();

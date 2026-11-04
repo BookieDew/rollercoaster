@@ -4,6 +4,7 @@ import db from '../../src/db/connection';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
 import { isUniqueViolation } from '../../src/db/repositories/transaction';
 import { ReasonCode } from '../../src/types/reasonCodes';
+import { parseJsonColumn } from '../helpers/testDb';
 
 const API_KEY = 'test-api-key';
 const SELECTIONS = [
@@ -148,7 +149,7 @@ describe('Phase 1a: brands, money, bonus caps and validity', () => {
       expect(validUntil).toBeGreaterThanOrEqual(before + 3_600_000);
       expect(validUntil).toBeLessThanOrEqual(Date.now() + 3_600_000);
       const audit = await db('audit_logs').where({ entity_id: res.body.id, action: 'GRANT' }).first();
-      expect(JSON.parse(audit.payload)).toMatchObject({ brandId: 'brand-a', validUntil: res.body.valid_until });
+      expect(parseJsonColumn(audit.payload)).toMatchObject({ brandId: 'brand-a', validUntil: res.body.valid_until });
     });
 
     it('allows the same bet_id in two brands and returns 409 within one brand', async () => {
@@ -288,7 +289,7 @@ describe('Phase 1a: brands, money, bonus caps and validity', () => {
       expect(row.currency).toBe('USD');
       expect(Number(row.bonus_cap_minor)).toBe(60_000);
       const audit = await db('audit_logs').where({ entity_id: rewardId, action: 'OPT_IN' }).first();
-      expect(JSON.parse(audit.payload)).toMatchObject({
+      expect(parseJsonColumn(audit.payload)).toMatchObject({
         brandId: 'brand-a', stakeMinor: 1_000_000_000_000, currency: 'USD', bonusCapMinor: 60_000,
       });
     });
@@ -365,7 +366,7 @@ describe('Phase 1a: brands, money, bonus caps and validity', () => {
 
       const audit = await db('audit_logs').where({ entity_id: rewardId, action: 'EXPIRE' });
       expect(audit).toHaveLength(1);
-      expect(JSON.parse(audit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(audit[0].payload)).toMatchObject({
         brandId: 'brand-a', reason: 'VALIDITY_ELAPSED', trigger: 'OPT_IN', previousStatus: 'GRANTED',
       });
 

@@ -57,7 +57,7 @@ started under older math were closed by migration 016. See [Known limitations](#
 ## Requirements
 
 - Node.js 24.13 with its bundled npm (see `.nvmrc`; `engines` allows `>=24.13.0 <25`)
-- SQLite (bundled through the `sqlite3` package; no separate install)
+- SQLite (bundled through the `sqlite3` package; no separate install) or PostgreSQL 16 (`pg` driver included)
 
 ## Local setup
 
@@ -83,8 +83,33 @@ npm run typecheck                          # type-check src, tests, migrations, 
 node --test tests/ui/ride-observer.test.cjs  # demo chart observer module
 ```
 
-Tests use an in-memory SQLite database and never read `.env`. Browser workflow
+Tests use an in-memory SQLite database and never read `.env`. The same suite also runs on
+PostgreSQL 16, see [Postgres](#postgres). Browser workflow
 checks for the demo UI are described in [tests/ui/README.md](tests/ui/README.md).
+
+## Postgres
+
+PostgreSQL 16 is supported through `DATABASE_URL=postgres://user:password@host:5432/dbname` (pool and TLS
+settings: `DATABASE_POOL_*`, `DATABASE_SSL*`). Migrations are the same files for both databases.
+
+```sh
+# Run (development): migrate, then start
+DATABASE_URL=postgres://… npm run migrate && DATABASE_URL=postgres://… npm run dev
+# Run (production): see "Production build, migrate and start" with a postgres:// DATABASE_URL
+
+# Test: the whole jest suite on a throw-away PostgreSQL
+scripts/pg-test-db.sh start   # docker run postgres:16-alpine, container rollercoaster-pg, 127.0.0.1:55432
+npm run test:pg               # sets TEST_DATABASE_URL (default: the container above) and runs jest
+scripts/pg-test-db.sh stop
+```
+
+- `TEST_DATABASE_URL` only has effect when `NODE_ENV=test`. Every test file works in its own schema, created
+  before and dropped after the file, so the database can be shared and left running.
+- Transactions run at PostgreSQL's default isolation level, READ COMMITTED. Race safety relies on conditional
+  updates (`WHERE status = …`), unique indexes and row locks taken by `UPDATE`, never on snapshot isolation.
+- Migration 017 converts any zone-less `timestamp` column to `timestamptz` (a no-op for databases built by these
+  migrations, where knex already creates `timestamptz`); repositories read timestamps through one helper, so the API
+  returns the same ISO-8601 UTC strings on both databases.
 
 ## Production build, migrate and start
 
@@ -120,7 +145,7 @@ All settings are environment variables (a `.env` file is read outside tests).
 |---|---|---|
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `PORT` | `3000` | Integer 1–65535 |
-| `DATABASE_URL` | `sqlite://./dev.db` | `sqlite://<path>` or `postgres(ql)://…` (PostgreSQL not yet verified). Required in production. Tests always use in-memory SQLite |
+| `DATABASE_URL` | `sqlite://./dev.db` | `sqlite://<path>` or `postgres(ql)://…` (PostgreSQL 16, see [Postgres](#postgres)). Required in production. Tests use in-memory SQLite unless `TEST_DATABASE_URL` is set |
 | `DATABASE_POOL_MIN` / `DATABASE_POOL_MAX` | `2` / `10` | PostgreSQL only |
 | `DATABASE_SSL` | `false` | PostgreSQL only |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED` | `true` | PostgreSQL only |
@@ -168,7 +193,7 @@ tests/                unit, integration and demo UI checks
 
 ## Known limitations
 
-- PostgreSQL is not yet verified: the `pg` driver is not a dependency, and a
-  `postgres://` URL fails at startup with an "install pg" message.
+- PostgreSQL 16 is verified by the full test suite (`npm run test:pg`) and a production start with
+  `migrate:prod`; it has not yet run under production load or with a managed provider's TLS settings.
 - There is no rate limiting yet.
 - Not ready for real-money use (see [Status](#status)).

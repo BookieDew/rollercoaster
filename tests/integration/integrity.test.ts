@@ -10,6 +10,7 @@ import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRe
 import type { RideMathSnapshotV4 as RideMathSnapshot } from '../../src/types/ride';
 import { seedCommitment } from '../../src/computations/v4';
 import { legacyPublicIdSeed, liveMomentMs } from '../helpers/v4Rides';
+import { parseJsonColumn } from '../helpers/testDb';
 
 const API_KEY = 'test-api-key';
 const SELECTIONS = [
@@ -73,7 +74,7 @@ function quote(rewardId: string, userId: string, betId: string) {
 
 async function rideMath(rewardId: string): Promise<RideMathSnapshot> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  return JSON.parse(row.ticket_snapshot).rideMath as RideMathSnapshot;
+  return parseJsonColumn(row.ticket_snapshot).rideMath as RideMathSnapshot;
 }
 
 async function rewardRow(rewardId: string) {
@@ -302,9 +303,9 @@ describe('Phase 0 fairness and money-path integrity', () => {
       const audit = await db('audit_logs').where({ entity_id: first, action: 'GRANT' });
       expect(audit).toHaveLength(1);
       const firstSeed = rows.find((r) => r.id === first).seed;
-      expect(JSON.parse(audit[0].payload).seedCommitment).toBe(seedCommitment(firstSeed));
-      expect(audit[0].payload).not.toContain(firstSeed);
-      expect(JSON.parse(audit[0].payload)).not.toHaveProperty('seed');
+      expect(parseJsonColumn(audit[0].payload).seedCommitment).toBe(seedCommitment(firstSeed));
+      expect(JSON.stringify(parseJsonColumn(audit[0].payload))).not.toContain(firstSeed);
+      expect(parseJsonColumn(audit[0].payload)).not.toHaveProperty('seed');
     });
   });
 

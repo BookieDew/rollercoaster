@@ -3,6 +3,7 @@ import { app } from '../../src/index';
 import db from '../../src/db/connection';
 import { ReasonCode } from '../../src/types/reasonCodes';
 import { findSeed } from '../helpers/v4Rides';
+import { parseJsonColumn } from '../helpers/testDb';
 
 describe('Eligibility Integration Tests', () => {
   const API_KEY = 'test-api-key';
@@ -377,7 +378,7 @@ describe('Eligibility Integration Tests', () => {
       // New rides freeze their timing at opt-in. Advance the evaluation clock
       // to the persisted end instead of mutating one copy of the schedule.
       const rewardRow = await db('user_rewards').where({ id: rewardId }).first();
-      const snapshot = JSON.parse(rewardRow.ticket_snapshot);
+      const snapshot = parseJsonColumn(rewardRow.ticket_snapshot);
       expect(snapshot.rideMath.version).toBe(4);
       expect(snapshot.rideMath.outcome).toBe('ENDED');
       expect(snapshot.rideMath.crashAtSeconds).toBeNull();

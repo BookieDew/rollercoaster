@@ -1,4 +1,5 @@
 import db from '../connection';
+import { toIsoTimestamp } from './columns';
 import { v4 as uuidv4 } from 'uuid';
 import type { RewardProfileVersion, CreateRewardProfileInput, UpdateRewardProfileInput } from '../../types/rewardProfile';
 import { parseBonusCapMap } from '../../money/minorUnits';
@@ -149,8 +150,8 @@ function mapToEntity(record: Record<string, unknown>): RewardProfileVersion {
       ? null
       : Number(record.reward_validity_seconds),
     isActive: Boolean(record.is_active),
-    createdAt: record.created_at as string,
-    updatedAt: record.updated_at as string,
+    createdAt: toIsoTimestamp(record.created_at),
+    updatedAt: toIsoTimestamp(record.updated_at),
   };
 }
 

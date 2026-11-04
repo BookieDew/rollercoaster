@@ -1,6 +1,7 @@
 import db from '../connection';
 import { executorFor, type TransactionScope } from './transaction';
 import { parseMinorUnits } from '../../money/minorUnits';
+import { toIsoTimestamp } from './columns';
 import type {
   BetSettlement,
   CreateBetSettlementInput,
@@ -124,8 +125,8 @@ function mapToEntity(record: Record<string, unknown>): BetSettlement {
     minimumsMet: parseNullableBoolean(record.minimums_met),
     replacementRewardId: (record.replacement_reward_id as string | null | undefined) ?? null,
     reason: (record.reason as string | null | undefined) ?? null,
-    settledAt: record.settled_at as string,
-    createdAt: record.created_at as string,
+    settledAt: toIsoTimestamp(record.settled_at),
+    createdAt: toIsoTimestamp(record.created_at),
   };
 }
 

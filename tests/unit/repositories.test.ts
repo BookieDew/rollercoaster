@@ -5,7 +5,7 @@ import { auditLogRepository } from '../../src/db/repositories/auditLogRepository
 import { betBoostLockRepository } from '../../src/db/repositories/betBoostLockRepository';
 import { settlementRepository } from '../../src/db/repositories/settlementRepository';
 import { userRewardRepository, BetAlreadyBoundError } from '../../src/db/repositories/userRewardRepository';
-import { runInTransaction } from '../../src/db/repositories/transaction';
+import { runInTransaction, isUniqueViolation } from '../../src/db/repositories/transaction';
 import type { LockSnapshot } from '../../src/types/betBoostLock';
 
 async function clearDb(): Promise<void> {
@@ -350,10 +350,11 @@ describe('repository coverage', () => {
       expect(await settlementRepository.findCurrentByBet('other-brand', fixture1.betId)).toBeNull();
 
       // A second current revision for the same lock is refused by the partial unique index.
-      await expect(settlementRepository.create({
+      const secondCurrent = await settlementRepository.create({
         ...base, id: uuidv4(), revision: 2, betResult: 'LOST', totalReturnMinor: '0', bonusMinor: 0,
         capApplied: false, minimumsMet: null,
-      })).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT' });
+      }).then(() => null, (error: unknown) => error);
+      expect(isUniqueViolation(secondCurrent)).toBe(true);
 
       const second = await runInTransaction(async (tx) => {
         expect(await settlementRepository.markSuperseded(first.id, tx)).toBe(true);

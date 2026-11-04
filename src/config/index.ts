@@ -21,6 +21,10 @@ export interface Config {
     /** TLS for PostgreSQL connections. */
     ssl: boolean;
     sslRejectUnauthorized: boolean;
+    /** Test runs on PostgreSQL only: the private schema a test file works in (TEST_DATABASE_SCHEMA). */
+    schema?: string;
+    /** True when the PostgreSQL URL came from TEST_DATABASE_URL (the only way the test environment leaves SQLite). */
+    fromTestDatabaseUrl?: boolean;
   };
   api: {
     keySecret: string;
@@ -160,6 +164,18 @@ function parseDatabaseUrl(
   return undefined;
 }
 
+function parseTestDatabaseUrl(
+  url: string,
+  issues: string[]
+): { client: DatabaseClient; url: string } | undefined {
+  const parsed = parseDatabaseUrl(url, issues);
+  if (parsed && parsed.client !== 'pg') {
+    issues.push('TEST_DATABASE_URL must be a postgres(ql):// URL');
+    return undefined;
+  }
+  return parsed;
+}
+
 /**
  * Secrets may never be empty. In production all three must be set explicitly, be
  * long, differ from each other and from known defaults/placeholders. Development
@@ -230,7 +246,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.DATABASE_URL === undefined && nodeEnv === 'production') {
     issues.push('DATABASE_URL is required in production');
   }
-  const database = parseDatabaseUrl(env.DATABASE_URL ?? DEFAULT_DATABASE_URL, issues);
+  // Opt-in PostgreSQL test database: TEST_DATABASE_URL replaces DATABASE_URL, in the test environment only.
+  const testDatabaseUrl = nodeEnv === 'test' ? env.TEST_DATABASE_URL?.trim() : undefined;
+  const database = testDatabaseUrl
+    ? parseTestDatabaseUrl(testDatabaseUrl, issues)
+    : parseDatabaseUrl(env.DATABASE_URL ?? DEFAULT_DATABASE_URL, issues);
+  const testSchema = testDatabaseUrl ? env.TEST_DATABASE_SCHEMA?.trim() || undefined : undefined;
+  if (testSchema !== undefined && !/^[a-z_][a-z0-9_]{0,62}$/.test(testSchema)) {
+    issues.push('TEST_DATABASE_SCHEMA must be a lower-case identifier (letters, digits, underscore)');
+  }
   const poolMin = parseVar(issues, 'DATABASE_POOL_MIN', env.DATABASE_POOL_MIN ?? '2', wholeNumber(0, 1000));
   const poolMax = parseVar(issues, 'DATABASE_POOL_MAX', env.DATABASE_POOL_MAX ?? '10', wholeNumber(1, 1000));
   if (poolMin !== undefined && poolMax !== undefined && poolMin > poolMax) {
@@ -297,6 +321,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       pool: { min: poolMin!, max: poolMax! },
       ssl: ssl!,
       sslRejectUnauthorized: sslRejectUnauthorized!,
+      ...(testSchema !== undefined ? { schema: testSchema } : {}),
+      ...(testDatabaseUrl ? { fromTestDatabaseUrl: true } : {}),
     },
     api: {
       keySecret: secrets.API_KEY_SECRET,
@@ -324,8 +350,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
 /**
  * Knex settings for the application and the knex CLI. The client follows
- * DATABASE_URL in every environment except test, which always uses a private
- * in-memory SQLite database (integration tests wipe tables).
+ * DATABASE_URL in every environment except test, which uses a private
+ * in-memory SQLite database (integration tests wipe tables) unless the opt-in
+ * TEST_DATABASE_URL selects a PostgreSQL database (`npm run test:pg`).
  * Migrations/seeds point at the TypeScript sources for the development workflow;
  * production migrations run from compiled JavaScript via `npm run migrate:prod`.
  */
@@ -335,7 +362,7 @@ export function buildKnexConfig(cfg: Config): Knex.Config {
     seeds: { directory: './seeds', extension: 'ts' },
   };
 
-  if (cfg.server.env === 'test') {
+  if (cfg.server.env === 'test' && !cfg.database.fromTestDatabaseUrl) {
     return { ...shared, client: 'sqlite3', connection: { filename: ':memory:' }, useNullAsDefault: true };
   }
 
@@ -351,6 +378,7 @@ export function buildKnexConfig(cfg: Config): Knex.Config {
       ...(cfg.database.ssl ? { ssl: { rejectUnauthorized: cfg.database.sslRejectUnauthorized } } : {}),
     },
     pool: { ...cfg.database.pool },
+    ...(cfg.database.schema ? { searchPath: [cfg.database.schema] } : {}),
   };
 }
 

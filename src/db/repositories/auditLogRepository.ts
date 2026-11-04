@@ -1,6 +1,7 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import { executorFor, type TransactionScope } from './transaction';
+import { toIsoTimestamp } from './columns';
 
 export interface AuditLogEntry {
   id: string;
@@ -74,8 +75,8 @@ function mapToEntity(record: Record<string, unknown>): AuditLogEntry {
     entityId: record.entity_id as string,
     action: record.action as string,
     payload,
-    timestamp: record.timestamp as string,
-    createdAt: record.created_at as string,
+    timestamp: toIsoTimestamp(record.timestamp),
+    createdAt: toIsoTimestamp(record.created_at),
   };
 }
 

@@ -33,6 +33,9 @@ describe('config module', () => {
     };
     delete process.env.ADMIN_API_KEY_SECRET;
     delete process.env.HMAC_SECRET;
+    // `npm run test:pg` sets these; these tests exercise DATABASE_URL on its own.
+    delete process.env.TEST_DATABASE_URL;
+    delete process.env.TEST_DATABASE_SCHEMA;
   });
 
   afterAll(() => {
@@ -481,27 +484,75 @@ describe('database connection module', () => {
     process.env = originalEnv;
   });
 
-  function pgInstalled(): boolean {
-    try {
-      require.resolve('pg');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  (pgInstalled() ? it.skip : it)('fails with a clear message when a postgres URL is used without pg', () => {
+  it('builds a PostgreSQL client from a postgres URL without connecting (the pg driver is installed)', async () => {
     process.env = {
       ...originalEnv,
       NODE_ENV: 'development',
       DATABASE_URL: 'postgres://app:pw@127.0.0.1:1/app',
     };
-    expect(() => {
+    delete process.env.TEST_DATABASE_URL;
+    let connection!: typeof import('../../src/db/connection');
+    jest.doMock('dotenv', () => ({ config: jest.fn() }));
+    try {
       jest.isolateModules(() => {
         // eslint-disable-next-line global-require
-        require('../../src/db/connection');
+        connection = require('../../src/db/connection');
       });
-    }).toThrow(/"pg" driver is not installed.*npm install pg/s);
+    } finally {
+      jest.dontMock('dotenv');
+    }
+    try {
+      expect((connection.default.client as { config: { client: string } }).config.client).toBe('pg');
+    } finally {
+      await connection.default.destroy();
+    }
+  });
+});
+
+describe('TEST_DATABASE_URL (opt-in PostgreSQL test database)', () => {
+  const PG_URL = 'postgres://t:t@127.0.0.1:55432/t';
+  const testEnv = (extra: Record<string, string> = {}) => ({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'sqlite://:memory:',
+    ...extra,
+  });
+
+  it('keeps the in-memory SQLite default when unset', () => {
+    const config = loadConfigFromEnv(testEnv());
+    expect(config.database.client).toBe('sqlite3');
+    expect(config.database.schema).toBeUndefined();
+  });
+
+  it('selects PostgreSQL and a private schema in the test environment', () => {
+    const config = loadConfigFromEnv(testEnv({ TEST_DATABASE_URL: PG_URL, TEST_DATABASE_SCHEMA: 't_abc_1' }));
+    expect(config.database).toMatchObject({ client: 'pg', url: PG_URL, schema: 't_abc_1' });
+    expect(buildKnexConfig(config)).toMatchObject({
+      client: 'pg',
+      connection: { connectionString: PG_URL },
+      searchPath: ['t_abc_1'],
+    });
+  });
+
+  it('never routes a postgres DATABASE_URL to the test environment: SQLite :memory: unless TEST_DATABASE_URL is set', () => {
+    const config = loadConfigFromEnv({ NODE_ENV: 'test', DATABASE_URL: 'postgres://prod:secret@db.internal/app' });
+    expect(buildKnexConfig(config)).toMatchObject({ client: 'sqlite3', connection: { filename: ':memory:' } });
+    expect(buildKnexConfig(loadConfigFromEnv(testEnv({ TEST_DATABASE_URL: PG_URL })))).toMatchObject({ client: 'pg' });
+  });
+
+  it('is ignored outside the test environment', () => {
+    const config = loadConfigFromEnv({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'sqlite://./dev.db',
+      TEST_DATABASE_URL: PG_URL,
+    });
+    expect(config.database).toMatchObject({ client: 'sqlite3', url: './dev.db' });
+  });
+
+  it('rejects a non-PostgreSQL URL and an unsafe schema name', () => {
+    expect(() => loadConfigFromEnv(testEnv({ TEST_DATABASE_URL: 'sqlite://./x.db' })))
+      .toThrow('TEST_DATABASE_URL must be a postgres(ql):// URL');
+    expect(() => loadConfigFromEnv(testEnv({ TEST_DATABASE_URL: PG_URL, TEST_DATABASE_SCHEMA: 'x"; DROP' })))
+      .toThrow('TEST_DATABASE_SCHEMA must be a lower-case identifier');
   });
 });
 
@@ -514,6 +565,7 @@ describe('DEMO_UI_ENABLED gating of /demo', () => {
 
   async function demoStatus(env: Record<string, string | undefined>): Promise<number> {
     process.env = { ...originalEnv, DATABASE_URL: 'sqlite://:memory:' };
+    delete process.env.TEST_DATABASE_URL;
     for (const [key, value] of Object.entries(env)) {
       if (value === undefined) {
         delete process.env[key];

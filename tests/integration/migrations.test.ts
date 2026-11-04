@@ -1,10 +1,18 @@
-import path from 'path';
-import Knex, { type Knex as KnexType } from 'knex';
+import { type Knex as KnexType } from 'knex';
+import { createIsolatedKnex, isPg, parseJsonColumn, type IsolatedKnex } from '../helpers/testDb';
 import { legacyBetId } from '../../migrations/013_rename_duplicate_bet_bindings';
 import { isUniqueViolation } from '../../src/db/repositories/transaction';
 
-const MIGRATIONS = path.resolve(__dirname, '../../migrations');
+// Migration 017 (timestamptz) is the newest; on SQLite it is a recorded no-op.
+const LATEST = '017_timestamps_with_time_zone.ts';
+const MIGRATION_COUNT = 17;
 
+const SETTLEMENT = {
+  r1: '0b000001-0000-4000-8000-000000000001',
+  r1Again: '0b000002-0000-4000-8000-000000000002',
+  r2Current: '0b000003-0000-4000-8000-000000000003',
+  r2: '0b000004-0000-4000-8000-000000000004',
+} as const;
 const PROFILE = '11111111-1111-4111-8111-111111111111';
 const R = {
   lockedFirst: 'a1111111-0000-4000-8000-000000000001',
@@ -17,15 +25,6 @@ const R = {
   noBetA: 'e8888888-0000-4000-8000-000000000008',
   noBetB: 'e9999999-0000-4000-8000-000000000009',
 } as const;
-
-function newKnex(): KnexType {
-  return Knex({
-    client: 'sqlite3',
-    connection: { filename: ':memory:' },
-    useNullAsDefault: true,
-    migrations: { directory: MIGRATIONS, extension: 'ts' },
-  });
-}
 
 async function migrateTo011(knex: KnexType): Promise<void> {
   for (let i = 0; i < 11; i += 1) {
@@ -93,14 +92,16 @@ async function auditActions(knex: KnexType, action: string) {
 }
 
 describe('Phase 1a migrations 012-016', () => {
+  let isolated: IsolatedKnex;
   let knex: KnexType;
 
-  beforeEach(() => {
-    knex = newKnex();
+  beforeEach(async () => {
+    isolated = await createIsolatedKnex();
+    knex = isolated.knex;
   });
 
   afterEach(async () => {
-    await knex.destroy();
+    await isolated.cleanup();
   });
 
   describe('on a database with legacy duplicate bet bindings', () => {
@@ -136,6 +137,7 @@ describe('Phase 1a migrations 012-016', () => {
         '014_add_user_rewards_brand_bet_unique_index.ts',
         '015_create_bet_settlements.ts',
         '016_close_inflight_rides_for_v4.ts',
+        LATEST,
       ]);
 
       expect((await knex('user_rewards').count('* as c').first())!.c).toBe(rewardCount);
@@ -153,14 +155,14 @@ describe('Phase 1a migrations 012-016', () => {
       expect(renames.map((row: { entity_id: string }) => row.entity_id).sort()).toEqual(
         [R.lockedFirst, R.lockedLast, R.later].sort()
       );
-      const payload = JSON.parse(renames.find((row: { entity_id: string }) => row.entity_id === R.lockedFirst).payload);
+      const payload = parseJsonColumn(renames.find((row: { entity_id: string }) => row.entity_id === R.lockedFirst).payload);
       expect(payload).toMatchObject({
         brandId: 'default',
         originalBetId: 'dup-locked',
         renamedBetId: legacyBetId('dup-locked', R.lockedFirst),
         keptRewardId: R.lockedOwner,
       });
-      const unlockedPayload = JSON.parse(renames.find((row: { entity_id: string }) => row.entity_id === R.later).payload);
+      const unlockedPayload = parseJsonColumn(renames.find((row: { entity_id: string }) => row.entity_id === R.later).payload);
       expect(unlockedPayload.keptRewardId).toBe(R.earliest);
     });
 
@@ -168,7 +170,11 @@ describe('Phase 1a migrations 012-016', () => {
       await knex.migrate.latest();
       const profile = await knex('reward_profile_versions').first();
       expect(profile.brand_id).toBe('default');
-      expect(profile.max_bonus_minor).toBe('{}');
+      if (isPg) {
+        expect(profile.max_bonus_minor).toEqual({}); // json column: parsed on PostgreSQL
+      } else {
+        expect(profile.max_bonus_minor).toBe('{}');
+      }
       expect(profile.reward_validity_seconds).toBeNull();
       for (const reward of await knex('user_rewards')) {
         expect(reward).toMatchObject({
@@ -182,18 +188,22 @@ describe('Phase 1a migrations 012-016', () => {
     it('creates the (brand_id, bet_id) unique index: NULL bets repeat, other brands and brand-wide duplicates behave', async () => {
       await knex.migrate.latest();
       const now = new Date().toISOString();
+      const ids = {
+        n1: '0a000001-0000-4000-8000-000000000001', n2: '0a000002-0000-4000-8000-000000000002',
+        o1: '0a000003-0000-4000-8000-000000000003', d1: '0a000004-0000-4000-8000-000000000004',
+      };
       const base = {
         user_id: 'idx', profile_version_id: PROFILE, status: 'GRANTED', start_time: now, end_time: now,
         seed: 's', created_at: now, updated_at: now,
       };
 
-      await knex('user_rewards').insert({ ...base, id: 'n1', brand_id: 'default', bet_id: null });
-      await knex('user_rewards').insert({ ...base, id: 'n2', brand_id: 'default', bet_id: null });
-      await knex('user_rewards').insert({ ...base, id: 'o1', brand_id: 'other', bet_id: 'unique-bet' });
+      await knex('user_rewards').insert({ ...base, id: ids.n1, brand_id: 'default', bet_id: null });
+      await knex('user_rewards').insert({ ...base, id: ids.n2, brand_id: 'default', bet_id: null });
+      await knex('user_rewards').insert({ ...base, id: ids.o1, brand_id: 'other', bet_id: 'unique-bet' });
 
       let error: unknown;
       try {
-        await knex('user_rewards').insert({ ...base, id: 'd1', brand_id: 'default', bet_id: 'unique-bet' });
+        await knex('user_rewards').insert({ ...base, id: ids.d1, brand_id: 'default', bet_id: 'unique-bet' });
       } catch (caught) {
         error = caught;
       }
@@ -242,7 +252,7 @@ describe('Phase 1a migrations 012-016', () => {
       await knex.migrate.latest();
 
       const [, rolledBack] = await knex.migrate.rollback();
-      expect(rolledBack).toHaveLength(5);
+      expect(rolledBack).toHaveLength(6);
       expect(await knex.schema.hasTable('settlement_records')).toBe(true);
       expect(await knex.schema.hasTable('bet_settlements')).toBe(false);
       expect(await betIds(knex)).toEqual(original);
@@ -251,7 +261,7 @@ describe('Phase 1a migrations 012-016', () => {
       expect(await knex.schema.hasColumn('reward_profile_versions', 'max_bonus_minor')).toBe(false);
       expect(await knex.schema.hasColumn('bet_boost_locks', 'brand_id')).toBe(false);
       // Rows survive the rollback, and the rename history stays in the audit log.
-      expect((await knex('user_rewards').count('* as c').first())!.c).toBe(9);
+      expect((await knex('user_rewards').count('* as c').first())!.c).toBe(isPg ? '9' : 9);
       expect(await auditActions(knex, 'LEGACY_BET_ID_RESTORED')).toHaveLength(3);
       expect(await auditActions(knex, 'LEGACY_BET_ID_RENAMED')).toHaveLength(3);
       // Pre-Phase-1a constraints still hold after the rollback.
@@ -266,7 +276,7 @@ describe('Phase 1a migrations 012-016', () => {
 
   it('migrates a fresh empty database without touching audit_logs', async () => {
     const [, applied] = await knex.migrate.latest();
-    expect(applied).toHaveLength(16);
+    expect(applied).toHaveLength(MIGRATION_COUNT);
     expect(await knex('audit_logs')).toHaveLength(0);
     expect(await knex.schema.hasColumn('user_rewards', 'replaces_reward_id')).toBe(true);
     expect(await knex.schema.hasColumn('reward_profile_versions', 'reward_validity_seconds')).toBe(true);
@@ -290,7 +300,23 @@ describe('Phase 1a migrations 012-016', () => {
       return (await knex('knex_migrations').select('name').orderBy('id')).map((row: { name: string }) => row.name);
     }
 
+    // Locks reference a reward and a reward references a profile (enforced on PostgreSQL).
+    async function ensureReward(rewardId: string): Promise<void> {
+      const now = '2026-02-03T07:00:00.000Z';
+      if (!(await knex('reward_profile_versions').where({ id: PROFILE }).first())) {
+        await knex('reward_profile_versions').insert({
+          id: PROFILE, name: 'Fixture', min_selections: 3, min_combined_odds: 3, min_selection_odds: 1.2,
+          min_boost_pct: 0.05, max_boost_pct: 0.5, ride_duration_seconds: 60, checkpoint_count: 12,
+          volatility: 0.5, is_active: true, created_at: now, updated_at: now,
+        });
+      }
+      if (!(await knex('user_rewards').where({ id: rewardId }).first())) {
+        await insertReward(knex, rewardId, null, now, 'GRANTED');
+      }
+    }
+
     async function seedLock(id: string, brandId: string, betId: string, rewardId: string): Promise<void> {
+      await ensureReward(rewardId);
       const now = new Date().toISOString();
       await knex('bet_boost_locks').insert({
         id, brand_id: brandId, bet_id: betId, reward_id: rewardId, locked_boost_pct: 0.2, qualifying_selections: 3,
@@ -324,11 +350,17 @@ describe('Phase 1a migrations 012-016', () => {
       // Once the legacy rows are archived and removed, the migration applies.
       await knex('settlement_records').del();
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts']);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', LATEST]);
       expect(await knex.schema.hasTable('settlement_records')).toBe(false);
     });
 
     async function lockIndexNames(): Promise<string[]> {
+      if (isPg) {
+        const result = await knex.raw(
+          "SELECT indexname AS name FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'bet_boost_locks'"
+        ) as { rows: Array<{ name: string }> };
+        return result.rows.map((row) => row.name);
+      }
       const rows = await knex.raw("PRAGMA index_list('bet_boost_locks')") as Array<{ name: string }>;
       return rows.map((row) => row.name);
     }
@@ -340,8 +372,9 @@ describe('Phase 1a migrations 012-016', () => {
       const up = await lockIndexNames();
       expect(up).not.toContain('bet_boost_locks_brand_id_bet_id_index');
       expect(up).toContain('bet_boost_locks_brand_id_bet_id_unique');
-      await knex.migrate.down();
-      await knex.migrate.down();
+      await knex.migrate.down(); // 017
+      await knex.migrate.down(); // 016
+      await knex.migrate.down(); // 015
       const down = await lockIndexNames();
       expect(down).toContain('bet_boost_locks_brand_id_bet_id_index');
       expect(down).not.toContain('bet_boost_locks_brand_id_bet_id_unique');
@@ -358,15 +391,16 @@ describe('Phase 1a migrations 012-016', () => {
         total_return_minor: HUGE_RETURN, locked_boost_pct: 0.2, bonus_minor: 1995,
         bonus_cap_minor: 50_000, cap_applied: false, minimums_met: null, settled_at: now, created_at: now,
       };
-      await knex('bet_settlements').insert({ ...row, id: 'r1', revision: 1, is_current: true });
-      const stored = await knex('bet_settlements').where({ id: 'r1' }).first();
+      await knex('bet_settlements').insert({ ...row, id: SETTLEMENT.r1, revision: 1, is_current: true });
+      const stored = await knex('bet_settlements').where({ id: SETTLEMENT.r1 }).first();
       // Text, not bigint: 100 legs at odds 10,000 on a 1e12 stake return 10^412 minor units.
       expect(stored.total_return_minor).toBe(HUGE_RETURN);
-      expect(stored.stake_minor).toBe(1_000_000_000_000);
+      // bigint: a number on SQLite, a decimal string on PostgreSQL (the repositories read it through parseMinorUnits).
+      expect(stored.stake_minor).toBe(isPg ? '1000000000000' : 1_000_000_000_000);
 
       const attempts = [
-        { ...row, id: 'r1-again', revision: 1, is_current: false },
-        { ...row, id: 'r2-current', revision: 2, is_current: true },
+        { ...row, id: SETTLEMENT.r1Again, revision: 1, is_current: false },
+        { ...row, id: SETTLEMENT.r2Current, revision: 2, is_current: true },
       ];
       for (const attempt of attempts) {
         let error: unknown;
@@ -377,7 +411,7 @@ describe('Phase 1a migrations 012-016', () => {
         }
         expect(isUniqueViolation(error)).toBe(true);
       }
-      await knex('bet_settlements').insert({ ...row, id: 'r2', revision: 2, is_current: false });
+      await knex('bet_settlements').insert({ ...row, id: SETTLEMENT.r2, revision: 2, is_current: false });
       expect(await knex('bet_settlements')).toHaveLength(2);
     });
 
@@ -386,6 +420,7 @@ describe('Phase 1a migrations 012-016', () => {
       await seedLock('55555555-5555-4555-8555-555555555555', 'brand-a', 'shared-bet', R.unique);
       await seedLock('66666666-6666-4666-8666-666666666666', 'brand-b', 'shared-bet', R.taken);
 
+      await knex.migrate.down(); // 017 (timestamps)
       await knex.migrate.down(); // 016 (nothing to restore here)
       await expect(knex.migrate.down()).rejects.toThrow(/locked in more than one brand/);
       expect(await knex.schema.hasTable('bet_settlements')).toBe(true);
@@ -393,7 +428,7 @@ describe('Phase 1a migrations 012-016', () => {
       await knex('bet_boost_locks').where({ brand_id: 'brand-b' }).del();
       const now = new Date().toISOString();
       await knex('bet_settlements').insert({
-        id: 'r1', brand_id: 'brand-a', bet_id: 'shared-bet', lock_id: '55555555-5555-4555-8555-555555555555',
+        id: SETTLEMENT.r1, brand_id: 'brand-a', bet_id: 'shared-bet', lock_id: '55555555-5555-4555-8555-555555555555',
         revision: 1, is_current: true, outcome: 'CASHOUT', bet_result: 'CASHED_OUT', currency: 'EUR',
         stake_minor: 1000, locked_boost_pct: 0.2, bonus_minor: 0, bonus_cap_minor: 50_000, cap_applied: false,
         settled_at: now, created_at: now,
@@ -414,7 +449,7 @@ describe('Phase 1a migrations 012-016', () => {
       expect(isUniqueViolation(error)).toBe(true);
 
       const [, applied] = await knex.migrate.latest();
-      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts']);
+      expect(applied).toEqual(['015_create_bet_settlements.ts', '016_close_inflight_rides_for_v4.ts', LATEST]);
     });
   });
 });

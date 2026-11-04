@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { UserReward, UserRewardStatus, CreateUserRewardInput } from '../../types/userReward';
 import { executorFor, type TransactionScope } from './transaction';
 import { parseMinorUnits } from '../../money/minorUnits';
+import { toIsoTimestamp, toIsoTimestampOrNull } from './columns';
 
 const TABLE = 'user_rewards';
 
@@ -208,19 +209,19 @@ function mapToEntity(record: Record<string, unknown>): UserReward {
     userId: record.user_id as string,
     profileVersionId: record.profile_version_id as string,
     status: record.status as UserRewardStatus,
-    startTime: record.start_time as string,
-    endTime: record.end_time as string,
+    startTime: toIsoTimestamp(record.start_time),
+    endTime: toIsoTimestamp(record.end_time),
     seed: record.seed as string,
     betId: record.bet_id as string | null,
     ticketSnapshot: snapshot as Record<string, unknown> | null,
-    optedInAt: record.opted_in_at as string | null,
-    validUntil: (record.valid_until as string | null | undefined) ?? null,
+    optedInAt: toIsoTimestampOrNull(record.opted_in_at),
+    validUntil: toIsoTimestampOrNull(record.valid_until),
     stakeMinor: parseMinorUnits(record.stake_minor),
     currency: (record.currency as string | null | undefined) ?? null,
     bonusCapMinor: parseMinorUnits(record.bonus_cap_minor),
     replacesRewardId: (record.replaces_reward_id as string | null | undefined) ?? null,
-    createdAt: record.created_at as string,
-    updatedAt: record.updated_at as string,
+    createdAt: toIsoTimestamp(record.created_at),
+    updatedAt: toIsoTimestamp(record.updated_at),
   };
 }
 

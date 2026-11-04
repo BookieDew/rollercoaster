@@ -5,6 +5,7 @@ import db from '../../src/db/connection';
 import { expireRewards } from '../../src/services/rewardExpiryService';
 import { userRewardRepository } from '../../src/db/repositories/userRewardRepository';
 import { findSeed } from '../helpers/v4Rides';
+import { parseJsonColumn } from '../helpers/testDb';
 
 /** V4 seeds (test ride limits): one that crashes at least 1 s before its end, one that never crashes. */
 const CRASH_SEED = findSeed('expiry-crash', (p) => p.outcome === 'CRASHED' && (p.crashAtSeconds as number) < p.durationSeconds - 1);
@@ -61,7 +62,7 @@ async function useSeed(rewardId: string, seed: string): Promise<void> {
 
 async function rideOf(rewardId: string): Promise<{ startMs: number; endMs: number; durationMs: number; crashMs: number | null }> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  const math = JSON.parse(row.ticket_snapshot).rideMath;
+  const math = parseJsonColumn(row.ticket_snapshot).rideMath;
   const startMs = Date.parse(math.startTime);
   const endMs = Date.parse(math.endTime);
   const crashMs = math.crashAtSeconds === null ? null : startMs + math.crashAtSeconds * 1000;
@@ -131,7 +132,7 @@ describe('Reward expiry job', () => {
 
       // One audit row per changed reward, none for the others.
       expect(await expireAudit(expiredA)).toHaveLength(1);
-      expect(JSON.parse((await expireAudit(expiredA))[0].payload)).toMatchObject({
+      expect(parseJsonColumn((await expireAudit(expiredA))[0].payload)).toMatchObject({
         brandId: 'brand-a', reason: 'VALIDITY_ELAPSED', trigger: 'JOB', previousStatus: 'GRANTED',
       });
       expect(await expireAudit(alive)).toHaveLength(0);
@@ -172,7 +173,7 @@ describe('Reward expiry job', () => {
       expect((await userRewardRepository.findById(rewardId))?.status).toBe('EXPIRED');
       const audit = await expireAudit(rewardId);
       expect(audit).toHaveLength(1);
-      expect(JSON.parse(audit[0].payload)).toMatchObject({
+      expect(parseJsonColumn(audit[0].payload)).toMatchObject({
         reason: 'RIDE_OVER_WITHOUT_LOCK', previousStatus: 'ENTERED', betId: 'live-bet', rideExpiryGraceSeconds: 0,
       });
 
@@ -209,7 +210,7 @@ describe('Reward expiry job', () => {
       expect((await userRewardRepository.findById(rewardId))?.status).toBe('ENTERED');
       const result = await expireRewards(new Date(endMs + 900_000));
       expect(result.entered_expired).toBe(1);
-      expect(JSON.parse((await expireAudit(rewardId))[0].payload)).toMatchObject({ rideExpiryGraceSeconds: 900 });
+      expect(parseJsonColumn((await expireAudit(rewardId))[0].payload)).toMatchObject({ rideExpiryGraceSeconds: 900 });
     });
 
     it('measures the grace from the crash, not from the end time', async () => {
@@ -365,7 +366,7 @@ describe('Reward expiry job', () => {
     it('reports REWARD_EXPIRED when an expired ride has no usable saved math', async () => {
       const ride = await enteredReward('expired-bad-math-bet', CRASH_SEED);
       const row = await db('user_rewards').where({ id: ride.rewardId }).first();
-      const snapshot = JSON.parse(row.ticket_snapshot);
+      const snapshot = parseJsonColumn(row.ticket_snapshot);
       snapshot.rideMath = { version: 3, broken: true };
       await db('user_rewards').where({ id: ride.rewardId })
         .update({ status: 'EXPIRED', ticket_snapshot: JSON.stringify(snapshot) });

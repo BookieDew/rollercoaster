@@ -2,6 +2,7 @@ import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import { executorFor, type TransactionScope } from './transaction';
 import type { BetBoostLock, CreateBetBoostLockInput } from '../../types/betBoostLock';
+import { toIsoTimestamp } from './columns';
 
 const TABLE = 'bet_boost_locks';
 
@@ -63,8 +64,8 @@ function mapToEntity(record: Record<string, unknown>): BetBoostLock {
     qualifyingOdds: Number(record.qualifying_odds),
     ticketStrength: Number(record.ticket_strength),
     snapshot,
-    lockedAt: record.locked_at as string,
-    createdAt: record.created_at as string,
+    lockedAt: toIsoTimestamp(record.locked_at),
+    createdAt: toIsoTimestamp(record.created_at),
   };
 }
 

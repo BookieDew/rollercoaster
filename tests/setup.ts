@@ -13,6 +13,23 @@ process.env.RIDE_MAX_DURATION_SECONDS = '10';
 process.env.RIDE_MIN_CRASH_SECONDS = '0.5';
 process.env.DATABASE_URL = 'sqlite://:memory:';
 
+// Opt-in PostgreSQL run (`npm run test:pg`): TEST_DATABASE_URL selects the database. Every test file works in
+// its own schema, created before and dropped after the file, so files cannot see each other's tables.
+if (process.env.TEST_DATABASE_URL) {
+  // eslint-disable-next-line global-require
+  const { privateSchemaName, createSchema, dropSchema } = require('./helpers/testDb') as typeof import('./helpers/testDb');
+  const schema = privateSchemaName();
+  process.env.TEST_DATABASE_SCHEMA = schema;
+  process.env.DATABASE_POOL_MIN = '0';
+  beforeAll(() => createSchema(schema));
+  afterAll(async () => {
+    // Close the shared application pool (a no-op when the file never loaded it), then drop the schema.
+    // eslint-disable-next-line global-require
+    await (require('../src/db/connection').default as import('knex').Knex).destroy();
+    await dropSchema(schema);
+  });
+}
+
 // Cause of rare `read ECONNRESET`: supertest's listen(0) binds the wildcard address, so macOS can pick a port another process holds on 127.0.0.1, where supertest then connects.
 // Bind those ephemeral servers to 127.0.0.1 instead. _listen2 is Node's synchronous bind (a host
 // argument to listen() resolves asynchronously, but supertest reads address() immediately).

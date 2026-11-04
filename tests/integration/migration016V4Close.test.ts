@@ -1,7 +1,6 @@
-import path from 'path';
 import Knex, { type Knex as KnexType } from 'knex';
+import { createIsolatedKnex, isPg, parseJsonColumn, type IsolatedKnex } from '../helpers/testDb';
 
-const MIGRATIONS = path.resolve(__dirname, '../../migrations');
 const PROFILE = '11111111-1111-4111-8111-111111111111';
 const NOW = '2026-02-03T07:00:00.000Z';
 const CLOSE = 'RIDE_CLOSED_V4_MIGRATION';
@@ -20,15 +19,6 @@ const ids = {
   otherBrandV3: 'a000000b-0000-4000-8000-00000000000b',
 } as const;
 const CLOSED_BY_MIGRATION = [ids.v1, ids.v2, ids.v3, ids.none, ids.otherBrandV3];
-
-function newKnex(): KnexType {
-  return Knex({
-    client: 'sqlite3',
-    connection: { filename: ':memory:' },
-    useNullAsDefault: true,
-    migrations: { directory: MIGRATIONS, extension: 'ts' },
-  });
-}
 
 async function migrateTo015(knex: KnexType): Promise<void> {
   for (let i = 0; i < 15; i += 1) await knex.migrate.up();
@@ -102,7 +92,9 @@ async function untouched(knex: KnexType): Promise<string> {
   const keep = [ids.v4, ids.lockedEntered, ids.usedV3, ids.settledV3, ids.granted, ids.expired];
   return JSON.stringify({
     rewards: await knex('user_rewards').whereIn('id', keep).orderBy('id'),
-    locks: await knex('bet_boost_locks').orderBy('id'),
+    // The widening changes the column type on PostgreSQL ("4.2000" decimal text -> 4.2 double): same number.
+    locks: (await knex('bet_boost_locks').orderBy('id'))
+      .map((lock: Record<string, unknown>) => ({ ...lock, qualifying_odds: Number(lock.qualifying_odds) })),
     settlements: await knex('bet_settlements').orderBy('id'),
   });
 }
@@ -113,24 +105,29 @@ async function statuses(knex: KnexType): Promise<Record<string, string>> {
 }
 
 describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', () => {
+  let isolated: IsolatedKnex;
   let knex: KnexType;
 
   beforeEach(async () => {
-    knex = newKnex();
+    isolated = await createIsolatedKnex();
+    knex = isolated.knex;
     await migrateTo015(knex);
     await seed(knex);
   });
 
   afterEach(async () => {
-    await knex.destroy();
+    await isolated.cleanup();
   });
+
+  // Migration 016 is exercised on its own (up/down one step): 017 (timestamptz) is a separate migration and,
+  // on PostgreSQL, re-reads every stored clock value, which would show up in the byte-identical comparisons.
 
   it('closes only unlocked, unsettled V1-V3 (and snapshot-less) rides, one audit row each', async () => {
     const before = await untouched(knex);
     const seedsBefore = await knex('user_rewards').select('id', 'seed').orderBy('id');
     const snapshotsBefore = await knex('user_rewards').select('id', 'ticket_snapshot').orderBy('id');
 
-    const [, applied] = await knex.migrate.latest();
+    const [, applied] = await knex.migrate.up();
     expect(applied).toEqual(['016_close_inflight_rides_for_v4.ts']);
 
     const after = await statuses(knex);
@@ -151,7 +148,7 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
     const audits = await knex('audit_logs').where({ action: CLOSE }).orderBy('entity_id');
     expect(audits.map((row: { entity_id: string }) => row.entity_id)).toEqual([...CLOSED_BY_MIGRATION].sort());
     const byId = Object.fromEntries(audits.map((row: { entity_id: string; payload: string }) =>
-      [row.entity_id, JSON.parse(row.payload)]));
+      [row.entity_id, parseJsonColumn(row.payload)]));
     expect(byId[ids.v2]).toMatchObject({
       reason: 'RIDE_CLOSED_BY_V4_MIGRATION', previousStatus: 'ENTERED', newStatus: 'EXPIRED',
       previousMathVersion: 2, brandId: 'default',
@@ -162,7 +159,7 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
   });
 
   it('is idempotent: a second run changes nothing, even after the migration is re-applied', async () => {
-    await knex.migrate.latest();
+    await knex.migrate.up();
     const snapshot = JSON.stringify([await knex('user_rewards').orderBy('id'), await knex('audit_logs').orderBy('id')]);
 
     // Run the up step again by hand: nothing is ENTERED on V1-V3 any more.
@@ -170,13 +167,15 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
     await migration.up(knex);
     expect(JSON.stringify([await knex('user_rewards').orderBy('id'), await knex('audit_logs').orderBy('id')]))
       .toBe(snapshot);
+    const [, remaining] = await knex.migrate.latest();
+    expect(remaining).toEqual(['017_timestamps_with_time_zone.ts']);
     const [, again] = await knex.migrate.latest();
     expect(again).toEqual([]);
   });
 
   it('rolls back exactly the rows it closed, leaving rides that changed since untouched', async () => {
     const original = await statuses(knex);
-    await knex.migrate.latest();
+    await knex.migrate.up();
     // A closed ride that moved on after the migration must not be reopened.
     const now = new Date(Date.now() + 5000).toISOString();
     await knex('audit_logs').insert({
@@ -185,7 +184,7 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
     });
     const before = await untouched(knex);
 
-    await knex.migrate.rollback();
+    await knex.migrate.down();
     const rolled = await statuses(knex);
     for (const id of [ids.v1, ids.v3, ids.none, ids.otherBrandV3]) expect(rolled[id]).toBe(original[id]);
     expect(rolled[ids.v2]).toBe('EXPIRED');
@@ -193,29 +192,29 @@ describe('migration 016: close in-flight V1-V3 rides, widen qualifying_odds', ()
     expect(await knex('audit_logs').where({ action: 'RIDE_RESTORED_V4_MIGRATION_ROLLBACK' })).toHaveLength(4);
 
     // Re-applying closes the restored rides again (one more audit row each); a second rollback restores each once.
-    await knex.migrate.latest();
+    await knex.migrate.up();
     expect(await knex('audit_logs').where({ action: CLOSE })).toHaveLength(CLOSED_BY_MIGRATION.length + 4);
-    await knex.migrate.rollback();
+    await knex.migrate.down();
     const again = await statuses(knex);
     for (const id of [ids.v1, ids.v3, ids.none, ids.otherBrandV3]) expect(again[id]).toBe('ENTERED');
     expect(await knex('audit_logs').where({ action: 'RIDE_RESTORED_V4_MIGRATION_ROLLBACK' })).toHaveLength(8);
   });
 
   it('treats another audit row in the same millisecond as later, so that ride is not reopened', async () => {
-    await knex.migrate.latest();
+    await knex.migrate.up();
     const close = await knex('audit_logs').where({ action: CLOSE, entity_id: ids.v2 }).first();
     await knex('audit_logs').insert({
       id: '00000000-0000-4000-8000-000000000000', entity_type: 'user_reward', entity_id: ids.v2,
       action: 'SAME_MILLISECOND', payload: null, timestamp: close.timestamp, created_at: close.created_at,
     });
-    await knex.migrate.rollback();
+    await knex.migrate.down();
     const rolled = await statuses(knex);
     expect(rolled[ids.v2]).toBe('EXPIRED');
     expect(rolled[ids.v1]).toBe('ENTERED');
   });
 
   it('stores any finite double in qualifying_odds, including Number.MAX_VALUE, and keeps the seed', async () => {
-    await knex.migrate.latest();
+    await knex.migrate.up();
     for (const [index, value] of [4.2, 1_000_000.5, 1e15, Number.MAX_VALUE].entries()) {
       const rewardId = `e000000${index}-0000-4000-8000-00000000000${index}`;
       await insertReward(knex, rewardId, 'USED', { rideMath: { version: 4 } });

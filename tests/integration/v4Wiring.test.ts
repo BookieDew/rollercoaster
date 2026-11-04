@@ -11,6 +11,8 @@ import { userRewardRepository } from '../../src/db/repositories/userRewardReposi
 import type { RideMathSnapshotV4 } from '../../src/types/ride';
 import type { UserReward } from '../../src/types/userReward';
 import { findSeed, liveMomentMs } from '../helpers/v4Rides';
+import { parseJsonColumn } from '../helpers/testDb';
+import { toIsoTimestamp } from '../../src/db/repositories/columns';
 
 /** Slice 1b-iii-a: every live path runs on the frozen V4 ride (math version 4). */
 const API_KEY = 'test-api-key';
@@ -56,7 +58,7 @@ async function enter(userId: string, betId: string, rideMode: RideMode = 'WAVES'
   });
   expect(optIn.status).toBe(200);
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  return { rewardId, profileId, math: JSON.parse(row.ticket_snapshot).rideMath as RideMathSnapshotV4 };
+  return { rewardId, profileId, math: parseJsonColumn(row.ticket_snapshot).rideMath as RideMathSnapshotV4 };
 }
 
 /** First epoch ms at which the service clock (elapsed = (ms - start) / 1000) is at or past `seconds`. */
@@ -80,7 +82,7 @@ function lock(rewardId: string, userId: string, betId: string) {
 
 async function updateSnapshot(rewardId: string, change: (snapshot: Record<string, unknown>) => void): Promise<void> {
   const row = await db('user_rewards').where({ id: rewardId }).first();
-  const snapshot = JSON.parse(row.ticket_snapshot);
+  const snapshot = parseJsonColumn(row.ticket_snapshot);
   change(snapshot);
   await db('user_rewards').where({ id: rewardId }).update({ ticket_snapshot: JSON.stringify(snapshot) });
 }
@@ -174,7 +176,7 @@ describe('V4 wiring (math version 4 on every live path)', () => {
     expect(locked.body.code).toBe(ReasonCode.INVALID_CONFIGURATION);
 
     const row = await db('user_rewards').where({ id: rewardId }).first();
-    const endMs = Date.parse(row.end_time);
+    const endMs = Date.parse(toIsoTimestamp(row.end_time));
     expect((await expireRewards(new Date(endMs - 1), 0)).entered_expired).toBe(0);
     expect((await expireRewards(new Date(endMs), 0)).entered_expired).toBe(1);
 
@@ -228,7 +230,7 @@ describe('V4 wiring (math version 4 on every live path)', () => {
       }
     }
     const stored = await db('bet_boost_locks').where({ bet_id: 'v4-huge-bet' }).first();
-    expect(JSON.parse(stored.snapshot).combinedOddsExact).toBe('1' + '0'.repeat(400));
+    expect(parseJsonColumn(stored.snapshot).combinedOddsExact).toBe('1' + '0'.repeat(400));
 
     // The lock read endpoint answers exactly like the lock itself (never the column's Number.MAX_VALUE).
     const read = await request(app).get('/api/boost/lock/v4-huge-bet?brand_id=brand-a').set('X-API-Key', API_KEY);
@@ -279,8 +281,8 @@ describe('V4 wiring (math version 4 on every live path)', () => {
     }
     // The ride snapshot itself was never rewritten.
     const after = await db('user_rewards').where({ id: rewardId }).first();
-    expect(JSON.parse(after.ticket_snapshot).rideMath).toEqual(JSON.parse(before.ticket_snapshot).rideMath);
-    expect(after.end_time).toBe(before.end_time);
+    expect(parseJsonColumn(after.ticket_snapshot).rideMath).toEqual(parseJsonColumn(before.ticket_snapshot).rideMath);
+    expect(after.end_time).toEqual(before.end_time);
   });
 
   it.each([
@@ -372,7 +374,7 @@ describe('V4 wiring (math version 4 on every live path)', () => {
 
     const { rewardId, math } = await enter('v4-pg', 'v4-pg-bet');
     const row = await db('user_rewards').where({ id: rewardId }).first();
-    expect(row.end_time).toBe(math.endTime);
+    expect(toIsoTimestamp(row.end_time)).toBe(math.endTime);
     jest.spyOn(Date, 'now').mockReturnValue(liveMomentMs(math));
     const live = await quote(rewardId, 'v4-pg', 'v4-pg-bet');
     expect(live.status).toBe(200);

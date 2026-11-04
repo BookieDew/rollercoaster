@@ -1,6 +1,7 @@
 import db from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import { executorFor, type TransactionScope } from './transaction';
+import { toIsoTimestamp } from './columns';
 
 export interface RideCheckpoint {
   id: string;
@@ -58,7 +59,7 @@ function mapToEntity(record: Record<string, unknown>): RideCheckpoint {
     checkpointIndex: record.checkpoint_index as number,
     timeOffsetPct: Number(record.time_offset_pct),
     baseBoostValue: Number(record.base_boost_value),
-    createdAt: record.created_at as string,
+    createdAt: toIsoTimestamp(record.created_at),
   };
 }
 
