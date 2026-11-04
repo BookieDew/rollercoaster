@@ -65,7 +65,7 @@
   /**
    * Potential return for a stake at the server's combined odds and a server boost (a fraction, 0.1 = 10%).
    * gross = stake x odds; bonus = min(stake x odds x boost, max bonus); boosted odds = (gross + bonus) / stake.
-   * Gross and bonus are each rounded half-up to whole minor units; boosted odds are rounded half-up to 2 dp.
+   * Gross and bonus are each rounded half-up (whole minor units); boosted odds are rounded half-up, 2 dp.
    */
   function computePotential({ stakeMinor, combinedOdds, boost, capMinor }) {
     const stake = toMinor(stakeMinor);
@@ -165,6 +165,8 @@
     trash: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2m-7 0 1 12h8l1-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     share: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M6 12v7h12v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     gear: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10.52 4.55L10.92 2.06L13.08 2.06L13.48 4.55L16.22 5.68L18.27 4.21L19.79 5.73L18.32 7.78L19.45 10.52L21.94 10.92L21.94 13.08L19.45 13.48L18.32 16.22L19.79 18.27L18.27 19.79L16.22 18.32L13.48 19.45L13.08 21.94L10.92 21.94L10.52 19.45L7.78 18.32L5.73 19.79L4.21 18.27L5.68 16.22L4.55 13.48L2.06 13.08L2.06 10.92L4.55 10.52L5.68 7.78L4.21 5.73L5.73 4.21L7.78 5.68ZM12 8.6a3.4 3.4 0 1 0 0 6.8a3.4 3.4 0 1 0 0-6.8Z"/></svg>',
+    soundOn: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4Z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    soundOff: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4Z" fill="currentColor"/><path d="m16 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     pencil: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 19 1-4 9-9 3 3-9 9-4 1Zm9-12 3 3" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
   };
   const CHIPS = [5, 20, 50, 100];
@@ -189,21 +191,8 @@
         <div class="slip-burst" data-s="burst" aria-hidden="true"></div>
         <div class="slip-boost-top"><h3 data-s="boostTitle">Boost ride</h3><span class="slip-info" aria-hidden="true">i</span></div>
         <p class="slip-boost-sub" data-s="boostSub"></p>
-        <div class="slip-live" data-show="live">
-          <div class="slip-live-main">
-            <span class="slip-live-pct" data-s="livePct">+0.00%</span>
-            <span class="slip-dir" data-s="liveDir" data-direction="none"><span class="slip-dir-arrow" data-s="liveArrow" aria-hidden="true">—</span><span data-s="liveDirText">No recent trend</span></span>
-          </div>
-          <svg class="slip-spark" viewBox="0 0 240 48" preserveAspectRatio="none" aria-hidden="true"><path data-s="spark" d=""></path></svg>
-        </div>
         <div class="slip-locked" data-show="locked"><span class="slip-locked-pct" data-s="lockedPct">+0.00% locked</span></div>
-        <div class="slip-scale" data-show="draft placed live">
-          <span class="slip-scale-min">0%</span>
-          <div class="slip-track"><div class="slip-fill" data-s="fill"></div><span class="slip-chip" data-s="chip" hidden></span></div>
-          <span class="slip-scale-max" data-s="scaleMax">up to —</span>
-        </div>
         <button type="button" class="slip-start" data-show="placed" data-s="start">Start boost ride</button>
-        <button type="button" class="slip-stop" data-show="live" data-s="stop">Stop and lock boost</button>
         <p class="slip-note" data-s="note" role="status" hidden></p>
       </section>
       <div class="slip-tools">
@@ -222,7 +211,36 @@
       </div>
       <button type="button" class="slip-place" data-s="place">Place bet</button>
       <div class="slip-return"><span>Potential max return:</span><span class="slip-return-vals"><s data-s="retOld" hidden></s><b data-s="retNew">—</b></span></div>
-    </div>`;
+    </div>
+    <section class="slip-stage" data-s="stage" data-view="ride" data-outcome="" aria-label="Boost ride stage" hidden>
+      <canvas class="stage-canvas" data-s="canvas" aria-hidden="true"></canvas>
+      <div class="stage-top">
+        <span class="stage-tag"><i class="stage-dot" aria-hidden="true"></i><span data-s="stageTag">Boost ride live</span></span>
+        <button type="button" class="stage-sound" data-s="sound" aria-pressed="false" aria-label="Sound off">${ICONS.soundOff}</button>
+      </div>
+      <div class="stage-main">
+        <div class="stage-ride">
+          <div class="stage-pct" data-s="livePct" aria-hidden="true">+0.00%</div>
+          <div class="stage-dir" data-s="liveDir" data-direction="none"><span class="stage-dir-arrow" data-s="liveArrow" aria-hidden="true">—</span><span data-s="liveDirText">No recent trend</span></div>
+        </div>
+        <div class="stage-result">
+          <div class="stage-result-title" data-s="resultTitle"></div>
+          <p class="stage-result-sub" data-s="resultSub"></p>
+        </div>
+        <span class="stage-sr" data-s="stageSr" role="status" aria-live="polite" aria-atomic="true"></span>
+      </div>
+      <div class="stage-arena" data-s="arena" aria-hidden="true"></div>
+      <div class="stage-foot">
+        <div class="stage-numbers">
+          <div class="stage-num"><span>Odds</span><span class="stage-num-vals"><s data-s="stageOddsOld" hidden></s><b data-s="stageOddsNew">—</b></span></div>
+          <div class="stage-num"><span>Potential return</span><span class="stage-num-vals"><s data-s="stageRetOld" hidden></s><b data-s="stageRetNew">—</b></span></div>
+        </div>
+        <p class="stage-confirm" data-s="stageConfirm" hidden>Confirming…</p>
+        <p class="stage-note" data-s="stageNote" hidden></p>
+        <button type="button" class="stage-stop" data-s="stop">Stop and lock boost</button>
+        <button type="button" class="stage-back" data-s="back" hidden>Back to slip</button>
+      </div>
+    </section>`;
 
   function mount(deps) {
     const { ride, state } = deps;
@@ -256,7 +274,32 @@
     const model = {
       open: false, placed: false, placedBetId: null, placing: false,
       precheck: null, server: null, identity: null, legsSignature: null, lastGroup: null, brandProbed: false, closeTimer: null,
+      stageView: null, resultTimer: null, outcome: null, srAt: 0, srText: '',
     };
+    const RS = globalThis.RideStage || null;
+    const sound = RS ? RS.createSound() : null;
+    const stageColors = () => {
+      const style = globalThis.getComputedStyle(panel);
+      const read = (name) => style.getPropertyValue(name).trim();
+      return { accent: read('--stage-accent') || read('--slip-green'), cool: read('--stage-cool'), bgTop: read('--stage-bg-top'), bgBottom: read('--stage-bg-bottom'), hot: read('--stage-hot'), amber: read('--stage-amber'), star: read('--stage-star') };
+    };
+    // Observed samples only; after a crash the terminal zero is not drawn, the comet fizzles where it last was seen.
+    const stageData = () => {
+      const samples = ride.samples;
+      const shown = ride.phase === 'crashed' && samples.length > 1 ? samples.slice(0, -1) : samples;
+      return { samples: shown, outcome: model.outcome };
+    };
+    const comet = RS ? RS.createStage({
+      canvas: el.canvas,
+      getData: stageData,
+      getColors: stageColors,
+      getBand: () => {
+        const canvasBox = el.canvas.getBoundingClientRect(), arena = el.arena.getBoundingClientRect();
+        return { top: arena.top - canvasBox.top + arena.height * 0.14, bottom: arena.bottom - canvasBox.top - arena.height * 0.12 };
+      },
+      reduced: () => reduced(),
+      onTick: (info) => sound && sound.setLevel(info.intensity),
+    }) : null;
 
     const setupValue = (id) => doc.getElementById(id).value;
     const tryMinor = (text) => { try { return deps.parseMinorAmount(text, 'Amount'); } catch (error) { return null; } };
@@ -283,7 +326,6 @@
       }
       if (!model.server) return;
       if (odds !== undefined && toRational(odds)) model.server.combinedOdds = odds;
-      if (typeof data.effective_max_boost_pct === 'number' && Number.isFinite(data.effective_max_boost_pct)) model.server.effectiveMax = data.effective_max_boost_pct;
       if ('ride_started' in data) {
         model.server.stakeMinor = data.stake_minor ?? null;
         model.server.currency = data.currency ?? null;
@@ -337,19 +379,6 @@
       }));
     }
 
-    function renderSpark() {
-      const samples = ride.samples;
-      if (!samples.length) { el.spark.setAttribute('d', ''); return; }
-      const width = 240, height = 48, pad = 4;
-      const lastSeconds = samples.at(-1).seconds;
-      const domain = sparkDomain(samples.map((sample) => sample.boost));
-      const x = (seconds) => (lastSeconds > 0 ? pad + (seconds / lastSeconds) * (width - 2 * pad) : width / 2);
-      const y = (boost) => height - pad - ((boost - domain.min) / (domain.max - domain.min)) * (height - 2 * pad);
-      const path = samples.map((sample, index) => `${index === 0 || sample.gapBefore ? 'M' : 'L'} ${x(sample.seconds).toFixed(1)} ${y(sample.boost).toFixed(1)}`).join(' ');
-      // One sample is a dot (zero-length round-capped segment), never a slope.
-      el.spark.setAttribute('d', samples.length === 1 ? `${path} h0.01` : path);
-    }
-
     function burst() {
       if (reduced()) return;
       el.burst.classList.remove('is-bursting');
@@ -380,18 +409,8 @@
 
       el.boost.dataset.state = name;
       el.boost.querySelectorAll('[data-show]').forEach((node) => { node.hidden = !node.dataset.show.split(' ').includes(group); });
-      if (group === 'locked' && model.lastGroup !== 'locked') burst();
-      model.lastGroup = group;
 
-      // Boost card
-      const effectiveMax = model.server?.effectiveMax;
-      const knownMax = active && typeof effectiveMax === 'number' && effectiveMax > 0;
-      el.scaleMax.textContent = knownMax ? `up to ${percentText(effectiveMax)}` : 'up to —';
-      const share = knownMax && boost !== null ? Math.max(0, Math.min(1, boost / effectiveMax)) : 0;
-      el.fill.style.width = `${(share * 100).toFixed(2)}%`;
-      el.chip.hidden = group !== 'live';
-      el.chip.style.setProperty('--p', `${(share * 100).toFixed(2)}%`);
-      el.chip.textContent = lastSample ? percentText(lastSample.boost) : '0%';
+      // Boost card. The player is never shown a maximum or ceiling; the stage carries the live numbers.
       const precheckBlocks = model.precheck && model.precheck.eligible === false && model.precheck.signature === signatureOf(legs);
       el.boostTitle.textContent = { draft: 'Boost ride', placed: 'Boost ride', live: 'Boost ride live', locked: 'Boost locked', over: 'No boost this time' }[group];
       el.boostSub.textContent = {
@@ -401,17 +420,8 @@
         locked: 'Your boost is locked on this bet.',
         over: ride.phase === 'crashed' ? 'The ride crashed before you stopped. Your odds are unchanged.' : 'The ride ended before you stopped. Your odds are unchanged.',
       }[group];
-      if (group === 'live') {
-        el.livePct.textContent = `+${(boost * 100).toFixed(2)}%`;
-        el.liveDir.dataset.direction = doc.getElementById('rideDirection').dataset.direction;
-        el.liveArrow.textContent = doc.getElementById('rideDirectionArrow').textContent;
-        el.liveDirText.textContent = doc.getElementById('rideDirectionText').textContent;
-        renderSpark();
-      }
       if (group === 'locked') el.lockedPct.textContent = `+${(ride.final.boost * 100).toFixed(2)}% locked`;
       el.start.disabled = !!state.pendingAction || !state.readyToStart || !!precheckBlocks;
-      el.stop.disabled = !!state.pendingAction || ride.phase === 'locking';
-      el.stop.textContent = ride.phase === 'locking' ? 'Locking…' : ride.phase === 'uncertain' ? 'Retry stop' : 'Stop and lock boost';
       const summary = deps.summary();
       const warning = summary.warning && summary.text ? summary.text : precheckBlocks && group === 'placed' ? `This ticket is not eligible for a boost (${model.precheck.reason || 'see console'}).` : '';
       el.note.hidden = !warning;
@@ -421,7 +431,6 @@
       setPair(el.oddsOld, el.oddsNew, showBoosted && boosted.boostedOdds !== boosted.baseOdds ? boosted.baseOdds : '', showBoosted ? boosted.boostedOdds : base ? base.baseOdds : odds.value && formatOdds(odds.value) ? formatOdds(odds.value) : '—');
       el.stake.textContent = m.stakeMinor == null ? '—' : formatStake(m.stakeMinor, m.currency);
       setPair(el.retOld, el.retNew, showBoosted && boosted.totalMinor !== boosted.grossMinor ? formatMoney(boosted.grossMinor, m.currency) : '', showBoosted ? formatMoney(boosted.totalMinor, m.currency) : base ? formatMoney(base.grossMinor, m.currency) : '—');
-      el.retNew.title = showBoosted && boosted.capped ? 'Bonus reached the maximum bonus for this reward' : '';
       el.oddsNew.closest('.slip-odds-box').dataset.boosted = String(!!showBoosted);
 
       // Stake chips and Place bet
@@ -433,6 +442,140 @@
       });
       el.place.disabled = model.placing || !!state.pendingAction || isActive() || group === 'placed';
       el.place.textContent = model.placing ? 'Placing bet…' : group === 'draft' ? 'Place bet' : group === 'placed' || isActive() ? 'Bet placed' : 'Place new bet';
+
+      syncStage(group, boost, warning);
+      model.lastGroup = group;
+    }
+
+    // ----- ride stage (whole-slip comet view while the ride runs, then a short result moment) -----
+    const RESULT_MS = 3000;
+    const SR_EVERY_MS = 3000;
+    const stageActive = () => model.open && model.stageView !== null;
+    const focusIsLoose = () => !doc.activeElement || doc.activeElement === doc.body || panel.contains(doc.activeElement);
+    function updateSoundButton() {
+      if (!sound) { el.sound.hidden = true; return; }
+      const on = sound.isEnabled();
+      el.sound.setAttribute('aria-pressed', String(on));
+      el.sound.setAttribute('aria-label', on ? 'Sound on' : 'Sound off');
+      el.sound.innerHTML = on ? ICONS.soundOn : ICONS.soundOff;
+    }
+    function showStage(view) {
+      model.stageView = view;
+      el.stage.hidden = false;
+      el.stage.dataset.view = view;
+      panel.dataset.stage = view;
+      panel.scrollTop = 0;
+      updateSoundButton();
+    }
+    function enterRide() {
+      clearTimeout(model.resultTimer);
+      model.outcome = null;
+      model.srAt = 0;
+      const loose = focusIsLoose();
+      showStage('ride');
+      el.stage.dataset.outcome = '';
+      comet?.reset();
+      comet?.start();
+      sound?.startRide();
+      if (loose) el.stop.focus({ preventScroll: true });
+    }
+    function enterResult(group) {
+      const kind = group === 'locked' ? 'locked' : 'crashed';
+      const wasRide = model.stageView === 'ride';
+      const loose = focusIsLoose();
+      showStage('result');
+      model.outcome = kind;
+      el.stage.dataset.outcome = kind;
+      if (!wasRide) { comet?.reset(); comet?.start(); }
+      comet?.setOutcome(kind);
+      if (kind === 'locked') sound?.lock(); else sound?.crash();
+      clearTimeout(model.resultTimer);
+      model.resultTimer = setTimeout(() => leaveStage(true), RESULT_MS);
+      model.srAt = 0;
+      if (loose) el.back.focus({ preventScroll: true });
+    }
+    function leaveStage(rerender) {
+      clearTimeout(model.resultTimer);
+      model.resultTimer = null;
+      const wasStage = model.stageView !== null;
+      const loose = focusIsLoose();
+      model.stageView = null;
+      model.outcome = null;
+      comet?.stop();
+      sound?.stop();
+      el.stage.hidden = true;
+      delete panel.dataset.stage;
+      if (!wasStage) return;
+      if (loose && model.open) closeButton.focus({ preventScroll: true });
+      if (rerender) {
+        render();
+        if (model.lastGroup === 'locked') burst();
+      }
+    }
+    /* The stage numbers are sized from the stage width (container units in CSS); this shrinks one line further
+     * when a long value (+1000.00% locked) would still overflow, on any font. */
+    function fitStageText(node, minPx) {
+      node.style.fontSize = '';
+      if (!node.isConnected || !node.clientWidth) return;
+      const natural = node.scrollWidth, available = node.clientWidth;
+      if (natural <= available) return;
+      const current = parseFloat(globalThis.getComputedStyle(node).fontSize) || 40;
+      node.style.fontSize = `${Math.max(minPx, Math.floor((current * available * 0.98) / natural))}px`;
+    }
+    const fitStage = () => { fitStageText(el.livePct, 24); if (el.stage.dataset.outcome === 'locked') fitStageText(el.resultTitle, 18); else el.resultTitle.style.fontSize = ''; };
+    if (globalThis.MutationObserver) new MutationObserver(fitStage).observe(el.stage, { childList: true, characterData: true, subtree: true });
+    function srAnnounce(text, force) {
+      const now = Date.now();
+      if (!force && now - model.srAt < SR_EVERY_MS) return;
+      model.srAt = now;
+      if (text !== model.srText) { model.srText = text; el.stageSr.textContent = text; }
+    }
+    function syncStage(group, boost, warning) {
+      const final = group === 'locked' || group === 'over';
+      const was = model.stageView;
+      if (group === 'live') { if (was !== 'ride') enterRide(); }
+      else if (final && was !== 'result' && (was === 'ride' || (was === null && ['live', 'placed'].includes(model.lastGroup)))) enterResult(group);
+      else if (!final && was !== null) leaveStage(false);
+      if (!model.stageView) {
+        if (group === 'locked' && model.lastGroup !== 'locked') burst();
+        return;
+      }
+      const view = model.stageView;
+      const level = RS ? RS.intensity(boost ?? 0) : 0;
+      el.stage.style.setProperty('--i', level.toFixed(3));
+      const confirming = ride.phase === 'locking' || ride.phase === 'uncertain';
+      el.stageTag.textContent = view === 'result' ? (group === 'locked' ? 'Boost locked' : 'Ride over') : confirming ? 'Confirming…' : 'Boost ride live';
+      if (view === 'ride') {
+        const text = `+${((boost ?? 0) * 100).toFixed(2)}%`;
+        el.livePct.textContent = text;
+        el.liveDir.dataset.direction = doc.getElementById('rideDirection').dataset.direction;
+        el.liveArrow.textContent = doc.getElementById('rideDirectionArrow').textContent;
+        el.liveDirText.textContent = doc.getElementById('rideDirectionText').textContent;
+        srAnnounce(confirming ? 'Confirming the boost' : `Boost ${text}`, false);
+      } else if (group === 'locked') {
+        const text = `+${(ride.final.boost * 100).toFixed(2)}% locked`;
+        el.resultTitle.textContent = text;
+        el.resultSub.textContent = 'Your boost is locked on this bet.';
+        srAnnounce(`Boost ${text}`, true);
+      } else {
+        el.resultTitle.textContent = 'No boost this time';
+        el.resultSub.textContent = ride.phase === 'crashed' ? 'The ride crashed before you stopped. Your odds are unchanged.' : 'The ride ended before you stopped. Your odds are unchanged.';
+        srAnnounce('No boost this time', true);
+      }
+      fitStage();
+      el.stageConfirm.hidden = !(view === 'ride' && confirming);
+      el.stageNote.hidden = !(view === 'ride' && warning);
+      el.stageNote.textContent = view === 'ride' ? warning : '';
+      el.stop.hidden = view !== 'ride';
+      el.back.hidden = view !== 'result';
+      el.stop.disabled = !!state.pendingAction || ride.phase === 'locking';
+      el.stop.textContent = ride.phase === 'locking' ? 'Locking…' : ride.phase === 'uncertain' ? 'Retry stop' : 'Stop and lock boost';
+      setPair(el.stageOddsOld, el.stageOddsNew, el.oddsOld.hidden ? '' : el.oddsOld.textContent, el.oddsNew.textContent);
+      setPair(el.stageRetOld, el.stageRetNew, el.retOld.hidden ? '' : el.retOld.textContent, el.retNew.textContent);
+      if (comet && model.open) {
+        if (!comet.isRunning() && !reduced()) comet.start();
+        else comet.redraw();
+      }
     }
 
     // ----- driving the console's own code paths -----
@@ -518,6 +661,11 @@
       if (opener) opener.setAttribute('aria-expanded', 'true');
       render();
       closeButton.focus();
+      if (model.stageView) {
+        comet?.start();
+        if (model.stageView === 'ride') sound?.startRide();
+        (model.stageView === 'ride' ? el.stop : el.back).focus({ preventScroll: true });
+      }
       probeBrand();
     }
     function finishClose() {
@@ -531,6 +679,8 @@
       if (!model.open) return;
       const hadFocus = panel.contains(doc.activeElement);
       model.open = false;
+      comet?.stop();
+      sound?.stop();
       doc.body.classList.remove('slip-open');
       if (opener) opener.setAttribute('aria-expanded', 'false');
       panel.inert = true;
@@ -543,11 +693,17 @@
     brandRequested(); // applies ?brand=1 / ?brand=0 right away; files are fetched on first open
     opener?.addEventListener('click', () => (model.open ? closeSlip() : openSlip()));
     closeButton.addEventListener('click', closeSlip);
+    // Audio may only start after the user has tapped or pressed something inside the slip.
+    panel.addEventListener('pointerdown', () => sound?.unlock(), true);
+    panel.addEventListener('keydown', () => sound?.unlock(), true);
+    globalThis.addEventListener('resize', () => { if (stageActive()) { fitStage(); if (comet) { comet.resize(); comet.redraw(); } } });
     doc.addEventListener('keydown', (event) => { if (event.key === 'Escape' && model.open && !event.defaultPrevented) { event.preventDefault(); closeSlip(); } });
     panel.addEventListener('click', (event) => {
       const target = event.target.closest('button');
       if (!target || target.getAttribute('aria-disabled') === 'true') return;
-      if (target === el.place) void placeBet();
+      if (target === el.sound) { sound?.unlock(); sound?.toggle(); updateSoundButton(); }
+      else if (target === el.back) leaveStage(true);
+      else if (target === el.place) void placeBet();
       else if (target === el.start) doc.getElementById('startRide').click();
       else if (target === el.stop) doc.getElementById('lockBoost').click();
       else if (target.dataset.stake && !target.disabled) {
