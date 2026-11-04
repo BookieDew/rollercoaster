@@ -118,6 +118,7 @@ describe('controller branch coverage', () => {
           lock_id: 'lock-1',
           brand_id: 'default',
           bet_id: 'bet-1',
+          boosted_bet: true,
           reward_id: 'reward-1',
           locked_boost_pct: 0.1,
           qualifying_selections: 3,

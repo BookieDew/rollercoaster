@@ -118,6 +118,8 @@ export interface LockResponse {
   brand_id: string;
   bet_id: string;
   reward_id: string;
+  /** Always true: a lock exists only for a boosted bet. Operator data for their own cash-out policy. */
+  boosted_bet: true;
   locked_boost_pct: number;
   qualifying_selections: number;
   /** Exact decimal string when the combined odds are beyond the double range. */
@@ -141,6 +143,15 @@ export interface LockResponse {
   ride_end_at_offset_seconds: number;
   ride_crash_at_offset_seconds: number;
   ride_path: RidePathPoint[];
+}
+
+/** GET /boost/bets/:betId: whether a bet is boosted (operator-only data). */
+export interface BoostedBetStatus {
+  brand_id: string;
+  bet_id: string;
+  boosted_bet: boolean;
+  locked_boost_pct: number | null;
+  locked_at: string | null;
 }
 
 export interface BetBoostLockDTO {

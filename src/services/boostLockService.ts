@@ -2,7 +2,7 @@ import { userRewardRepository } from '../db/repositories/userRewardRepository';
 import { betBoostLockRepository } from '../db/repositories/betBoostLockRepository';
 import { auditLogRepository } from '../db/repositories/auditLogRepository';
 import { runInTransaction, Rollback, isUniqueViolation } from '../db/repositories/transaction';
-import type { BetBoostLock, LockResponse, LockSnapshotV4 } from '../types/betBoostLock';
+import type { BetBoostLock, BoostedBetStatus, LockResponse, LockSnapshotV4 } from '../types/betBoostLock';
 import type { UserReward } from '../types/userReward';
 import type { Selection } from '../types/ticket';
 import { MAXIMUM_MODEL_V4 } from '../types/ride';
@@ -408,6 +408,18 @@ export async function getLockByBetId(
   return { success: true, data: lock ? withExactOdds(lock) : null };
 }
 
+/** Whether (brand_id, bet_id) is a boosted bet, i.e. has a lock. Never an error for an unlocked bet. */
+export async function getBoostedBetStatus(brandId: string, betId: string): Promise<BoostedBetStatus> {
+  const lock = await betBoostLockRepository.findByBetId(betId, brandId);
+  return {
+    brand_id: brandId,
+    bet_id: betId,
+    boosted_bet: lock !== null,
+    locked_boost_pct: lock ? lock.lockedBoostPct : null,
+    locked_at: lock ? lock.lockedAt : null,
+  };
+}
+
 /**
  * The stored lock with the combined odds as frozen in its V4 snapshot: an exact decimal string beyond the
  * double range, a number otherwise. The numeric column cannot hold such odds (it stores Number.MAX_VALUE),
@@ -427,6 +439,7 @@ function buildLockResponse(stored: BetBoostLock): LockResponse {
     brand_id: lock.brandId,
     bet_id: lock.betId,
     reward_id: lock.rewardId,
+    boosted_bet: true,
     locked_boost_pct: lock.lockedBoostPct,
     qualifying_selections: lock.qualifyingSelections,
     qualifying_odds: lock.qualifyingOdds,
@@ -473,4 +486,5 @@ function roundToDecimals(value: number, decimals: number): number {
 export const boostLockService = {
   lockBoost,
   getLockByBetId,
+  getBoostedBetStatus,
 };

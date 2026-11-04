@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getQuote, lockBoost, getLock } from '../controllers/boostController';
+import { getQuote, lockBoost, getLock, getBoostedBet } from '../controllers/boostController';
 import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -26,5 +26,11 @@ router.post('/lock', lockBoost);
  * Get an existing lock by bet ID
  */
 router.get('/lock/:betId', getLock);
+
+/**
+ * GET /boost/bets/:betId
+ * Whether a bet is boosted (operator-only data for the operator's own cash-out policy)
+ */
+router.get('/bets/:betId', getBoostedBet);
 
 export default router;

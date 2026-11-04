@@ -693,6 +693,7 @@ the full response also includes `boost_model` and `ride_path`:
   "brand_id": "acme",
   "bet_id": "bet-789",
   "reward_id": "660e8400-e29b-41d4-a716-446655440001",
+  "boosted_bet": true,
   "locked_boost_pct": 0.251138,
   "qualifying_selections": 3,
   "qualifying_odds": 3.375,
@@ -728,6 +729,26 @@ HTTP 200 returns the saved lock fields shown above, including the stored
 It does not recalculate against the current profile. Historical locks without model
 metadata omit `maximum_model` on both read and repeated lock responses. A missing
 lock returns 404 with code `LOCK_NOT_FOUND`.
+
+### Boosted-bet flag (operator-only data)
+
+Every lock response (`POST /api/boost/lock`, a repeat of it, and `GET /api/boost/lock/:betId`)
+carries `"boosted_bet": true`. To ask about any bet, including one that was never boosted:
+
+**GET** `/api/boost/bets/:betId?brand_id=acme` (same API key; `brand_id` required, else 400
+`VALIDATION_ERROR`). It always answers 200 for a valid request:
+
+```json
+{ "brand_id": "acme", "bet_id": "bet-789", "boosted_bet": true, "locked_boost_pct": 0.251138, "locked_at": "2026-09-18T10:00:01.390Z" }
+```
+
+With no lock for `(brand_id, bet_id)` (never entered, crashed or ended before a lock, or only
+another brand has it) the answer is `boosted_bet: false` with `locked_boost_pct` and `locked_at`
+`null`. This is data for the operator, not for players. Whether and how a boosted bet may be
+cashed out is the operator's own policy; this service builds and enforces no cash-out logic.
+The rule is unchanged: a settlement outcome of `CASHOUT` pays no bonus and the token stays
+spent. The bonus is computed from the stake and odds recorded at opt-in, so an operator that
+keeps the boost on a partially cashed-out bet owns that adjustment.
 
 ---
 

@@ -97,6 +97,7 @@ export async function getLock(
       brand_id: result.data.brandId,
       bet_id: result.data.betId,
       reward_id: result.data.rewardId,
+      boosted_bet: true,
       locked_boost_pct: result.data.lockedBoostPct,
       qualifying_selections: result.data.qualifyingSelections,
       qualifying_odds: result.data.qualifyingOdds,
@@ -126,6 +127,24 @@ export async function getLock(
       ),
       ride_path: result.data.snapshot.ridePath,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /boost/bets/:betId - Whether a bet is boosted (operator-only data); 200 for any valid request
+ */
+export async function getBoostedBet(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { betId } = betIdParamsSchema.parse(req.params);
+    const { brand_id: brandId } = brandQuerySchema.parse(req.query);
+
+    res.json(await boostLockService.getBoostedBetStatus(brandId, betId));
   } catch (error) {
     next(error);
   }

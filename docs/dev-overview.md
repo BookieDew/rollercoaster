@@ -32,6 +32,7 @@ This doc is the quickest on-ramp for engineers reviewing the Combo Boost Rollerc
 - Ticket strength weighting is `75%` qualifying selection count and `25%` combined odds.
 - Effective minimum boost can rise with ticket quality when max-access targets are configured (`effective_min_floor_rate`, default `0.35`). The profile max-access weights are separate from ticket-strength weights.
 - Single-use reward: lock consumes the token.
+- Boosted-bet flag (operator-only data): lock responses carry `boosted_bet: true`; `GET /api/boost/bets/:betId?brand_id=` always answers 200 with `{ brand_id, bet_id, boosted_bet, locked_boost_pct, locked_at }` (`false` and nulls when no lock exists in that brand). Cash-out policy is the operator's choice: no cash-out logic here; `CASHOUT` settlement still pays no bonus, and the bonus uses the stake/odds recorded at opt-in, so keeping the boost on a partially cashed-out bet is the operator's adjustment.
 - Optional max-boost thresholds: `max_boost_min_selections`, `max_boost_min_combined_odds`.
 - Responses distinguish `RIDE_CRASHED` vs `RIDE_ENDED`.
 - Ride modes are profile-configurable: `WAVES` or `LINEAR`.
